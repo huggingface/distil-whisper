@@ -7,6 +7,11 @@
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% WER** on 
 out-of-distribution evaluation sets.
 
+| Model | Link |
+| ---   | --- |
+| `distil-whisper-large` | To be published on October 2nd |
+| `distil-whisper-medium` | To be published on October 2nd |
+
 ## 1. Usage 👨‍💻
 
 The Distil-Whisper checkpoints will be released this Thursday with a direct 🤗 Transformers integration. Instructions 
