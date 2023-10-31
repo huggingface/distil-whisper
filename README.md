@@ -57,10 +57,13 @@ We train Distil-Whisper on a total of 22k hours of pseudo-labelled audio data, s
 </p>
 
 This diverse audio dataset is paramount to ensuring robustness of Distil-Whisper to different datasets and domains. 
+
 In addition, we use a WER filter to discard pseudo-labels where Whisper mis-transcribes or hallucinates. Specifically, 
 we discard samples where the normalised WER between the Whisper pseudo-labels and the ground truth transcriptions exceeds
-a threshold $\lambda$. This improves WER performance of the downstream distilled model:
+a threshold $\lambda$. This greatly improves WER performance of the downstream distilled model:
 
 <p align="center">
   <img src="https://huggingface.co/datasets/distil-whisper/figures/resolve/main/threshold.png?raw=true" width="600"/>
 </p>
+
+For full details on the distillation set-up and evaluation results, refer to the [Distil-Whisper paper](./Distil_Whisper.pdf).
