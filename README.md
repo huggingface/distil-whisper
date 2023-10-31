@@ -54,12 +54,12 @@ To distill Whisper, we copy the entire encoder module and freeze it during train
 which are initialised from the first and last decoder layers from Whisper. All other decoder layers from Whisper
 are discarded.
 
-Distil-Whisper is trained on a *knowledge distillation* objective. Specifically, it is trained to minimise the KL divergence
-between the distilled model and the Whisper model, as well as the cross-entropy loss on pseudo-labelled audio data.
-
 <p align="center">
   <img src="https://huggingface.co/datasets/distil-whisper/figures/resolve/main/architecture.png?raw=true" width="600"/>
 </p>
+
+Distil-Whisper is trained on a *knowledge distillation* objective. Specifically, it is trained to minimise the KL divergence
+between the distilled model and the Whisper model, as well as the cross-entropy loss on pseudo-labelled audio data.
 
 We train Distil-Whisper on a total of 22k hours of pseudo-labelled audio data, spanning 10 domains with over 18k speakers:
 
@@ -69,12 +69,7 @@ We train Distil-Whisper on a total of 22k hours of pseudo-labelled audio data, s
 
 This diverse audio dataset is paramount to ensuring robustness of Distil-Whisper to different datasets and domains. 
 
-In addition, we use a WER filter to discard pseudo-labels where Whisper mis-transcribes or hallucinates. Specifically, 
-we discard samples where the normalised WER between the Whisper pseudo-labels and the ground truth transcriptions exceeds
-a threshold $\lambda$. This greatly improves WER performance of the downstream distilled model:
-
-<p align="center">
-  <img src="https://huggingface.co/datasets/distil-whisper/figures/resolve/main/threshold.png?raw=true" width="600"/>
-</p>
+In addition, we use a WER filter to discard pseudo-labels where Whisper mis-transcribes or hallucinates. This greatly 
+improves WER performance of the downstream distilled model.
 
 For full details on the distillation set-up and evaluation results, refer to the [Distil-Whisper paper](./Distil_Whisper.pdf).
