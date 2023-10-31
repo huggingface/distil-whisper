@@ -14,7 +14,7 @@ out-of-distribution evaluation sets.
 
 ## 1. Usage 👨‍💻
 
-The Distil-Whisper checkpoints will be released on October 2nd with a direct 🤗 Transformers integration. Instructions 
+The Distil-Whisper checkpoints will be released on November 2nd with a direct 🤗 Transformers integration. Instructions 
 for running inference will be provided here:
 
 ```python
