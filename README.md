@@ -25,7 +25,7 @@ from transformers import WhisperForConditionalGeneration
 
 ## 2. Why use Distil-Whisper? ⁉️
 
-Distil-Whisper is designed to be a drop-in replacement for Whisper on English ASR. Here are 4 reasons for making the
+Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 4 reasons for making the
 switch to Distil-Whisper:
 
 1. **Faster inference:** 6 times faster inference speed, while performing to within 1% WER of Whisper on out-of-distribution audio:
