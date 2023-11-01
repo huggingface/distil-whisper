@@ -73,3 +73,7 @@ In addition, we use a WER filter to discard pseudo-labels where Whisper mis-tran
 improves WER performance of the downstream distilled model.
 
 For full details on the distillation set-up and evaluation results, refer to the [Distil-Whisper paper](./Distil_Whisper.pdf).
+
+## 4. Acknowledgements
+* OpenAI for the original Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [codebase](https://github.com/openai/whisper)
+* Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) programme for Cloud TPU v4s
