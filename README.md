@@ -7,10 +7,10 @@
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% WER** on 
 out-of-distribution evaluation sets.
 
-| Model | Link |
-| ---   | --- |
-| `distil-whisper-large` | To be published on November 2nd |
-| `distil-whisper-medium` | To be published on November 2nd |
+| Model              | Link                            |
+|--------------------|---------------------------------|
+| `distil-medium.en` | To be published on November 2nd |
+| `distil-large-v2`  | To be published on November 2nd |
 
 ## 1. Usage 👨‍💻
 
