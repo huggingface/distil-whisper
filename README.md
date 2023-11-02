@@ -27,14 +27,14 @@ pip install --upgrade transformers accelerate datasets[audio]
 
 ### Short-Form Transcription
 
-The model can be used with the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline)
-class to transcribe short-form audio files as follows:
+First, we load Distil-Whisper via the convenient [`AutoModelForSpeechSeq2Seq`](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSpeechSeq2Seq) and [`AutoProcessor`](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoProcessor) classes.
+
+We load the model in `float16` precision and make sure that loading time takes as little time as possibel by passing `low_cpu_mem_usage=True`.
+In addition, we want to make sure that the model is loaded in [`safetensors`](https://github.com/huggingface/safetensors) format by passing `use_safetensors=True`.
 
 ```python
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-from datasets import load_dataset
-
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -47,7 +47,12 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(
 model.to(device)
 
 processor = AutoProcessor.from_pretrained(model_id)
+```
 
+The model and processor can then be passed to the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+**Note** that if you would like to have more control over the generation process, you can directly make use of `model.generate(...)` as shown [here](https://huggingface.co/docs/transformers/v4.34.1/en/model_doc/whisper#transformers.WhisperForConditionalGeneration.forward.example).
+
+```py
 pipe = pipeline(
     "automatic-speech-recognition",
     model=model,
@@ -57,10 +62,19 @@ pipe = pipeline(
     torch_dtype=torch_dtype,
     device=device,
 )
+```
 
+Next, we load an examplary short-form audio from the LibriSpeech corpus:
+
+```py
+from datasets import load_dataset
 dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
 sample = dataset[0]["audio"]
+```
 
+Finally, you can just call the pipeline to transcribe your audio:
+
+```py
 result = pipe(sample)
 print(result["text"])
 ```
@@ -71,19 +85,18 @@ To transcribe a local audio file, simply pass the path to your audio file when y
 + result = pipe("audio.mp3")
 ```
 
+For more information on how to customize the automatic speech recognition pipeline, please have a look [here](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+
 ### Long-Form Transcription
 
 Distil-Whisper uses a chunked algorithm to transcribe long-form audio files. In practice, this chunked long-form algorithm 
 is 9x faster than the sequential algorithm proposed by OpenAI in the Whisper paper (see Table 7 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
 
-To enable chunking, pass the `chunk_length_s` parameter to the `pipeline`. For Distil-Whisper, a chunk length of 15-seconds
-is optimal. To activate batching, pass the argument `batch_size`:
+You can load the model just like before:
 
-```python
+```py
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-from datasets import load_dataset
-
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -96,7 +109,12 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(
 model.to(device)
 
 processor = AutoProcessor.from_pretrained(model_id)
+```
 
+To enable chunking, pass the `chunk_length_s` parameter to the `pipeline`. For Distil-Whisper, a chunk length of 15-seconds
+is optimal. To activate batching, pass the argument `batch_size`:
+
+```python
 pipe = pipeline(
     "automatic-speech-recognition",
     model=model,
@@ -108,10 +126,18 @@ pipe = pipeline(
     torch_dtype=torch_dtype,
     device=device,
 )
+```
 
+Now, let's load a long-form audio which is a concatenated audio of multiple Librispeech samples:
+
+```py
 dataset = load_dataset("distil-whisper/librispeech_long", "default", split="validation")
 sample = dataset[0]["audio"]
+```
 
+Finally, you just need to call the pipeline.
+
+```py
 result = pipe(sample)
 print(result["text"])
 ```
@@ -124,29 +150,29 @@ result = pipe("https://huggingface.co/datasets/sanchit-gandhi/librispeech_long/r
 ```
 --->
 
+For more information on how to customize the automatic speech recognition pipeline, please have a look [here](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+
 ### Speculative Decoding
 
-Distil-Whisper can be used as an assistant model to Whisper for speculative decoding. Speculative decoding mathematically
-ensures the exact same outputs as Whisper are obtained while being 2 times faster. This makes it the perfect drop-in 
+Distil-Whisper can be used as an assistant model to Whisper for speculative decoding. 
+As a refresher, we recommend reading Joao's [amazing blog post](https://huggingface.co/blog/assisted-generation) or taking a look into [the original paper](https://arxiv.org/abs/2211.17192).
+Speculative decoding mathematically ensures the exact same outputs as Whisper are obtained while being 2 times faster. This makes it the perfect drop-in 
 replacement for existing Whisper pipelines, since the same outputs are guaranteed.
+
+For speculative decoding, we need to load both the teacher: [`openai/whisper-large-v2`](https://huggingface.co/openai/whisper-large-v2) as well 
+as the assistant (*a.k.a* student) [`distil-whisper/distil-large-v2`](https://huggingface.co/distil-whisper/distil-large-v2).
+
+Let's start by loading the teacher:
 
 In the following code-snippet, we load the assistant Distil-Whisper model standalone to the main Whisper pipeline. We then
 specify it as the "assistant model" for generation:
 
 ```python
-from transformers import pipeline, AutoModelForCausalLM, AutoModelForSpeechSeq2Seq, AutoProcessor
+from transformers import pipeline AutoModelForSpeechSeq2Seq, AutoProcessor
 import torch
-from datasets import load_dataset
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-assistant_model_id = "distil-whisper/distil-large-v2"
-
-assistant_model = AutoModelForCausalLM.from_pretrained(
-    assistant_model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
-)
-assistant_model.to(device)
 
 model_id = "openai/whisper-large-v2"
 
@@ -156,7 +182,25 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(
 model.to(device)
 
 processor = AutoProcessor.from_pretrained(model_id)
+```
 
+Since Disti-Whisper shares the exact same encoder as the teacher model, we only need
+to load the 2-layer decoder into a "Decoder-only"-model:
+
+```py
+from transformers import pipeline AutoModelForCausalLM
+assistant_model_id = "distil-whisper/distil-large-v2"
+
+assistant_model = AutoModelForCausalLM.from_pretrained(
+    assistant_model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+)
+assistant_model.to(device)
+```
+
+Our assistant model, now needs to be passed to `generate_kwargs` under the key `"assistant_model"`
+so that [assistant generation](https://huggingface.co/docs/transformers/main/en/main_classes/text_generation#transformers.GenerationMixin.generate.assistant_model) can be enabled.
+
+```py
 pipe = pipeline(
     "automatic-speech-recognition",
     model=model,
@@ -167,13 +211,20 @@ pipe = pipeline(
     torch_dtype=torch_dtype,
     device=device,
 )
+```
 
+Just like before, we can pass any sample to the pipeline now.
+
+```py
 dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
 sample = dataset[0]["audio"]
 
 result = pipe(sample)
 print(result["text"])
 ```
+
+**Note** that the assistant decoding should be on average ~2x faster than using "only" Whisper-large-v2 at a mere 8% in VRAM memory usage increase while
+ensuring to give exactly the same results.
 
 ## 2. Why use Distil-Whisper? ⁉️
 
