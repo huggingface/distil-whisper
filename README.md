@@ -50,7 +50,7 @@ processor = AutoProcessor.from_pretrained(model_id)
 ```
 
 The model and processor can then be passed to the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
-**Note** that if you would like to have more control over the generation process, you can directly make use of `model.generate(...)` as shown [here](https://huggingface.co/docs/transformers/v4.34.1/en/model_doc/whisper#transformers.WhisperForConditionalGeneration.forward.example).
+Note that if you would like to have more control over the generation process, you can directly make use of `model.generate(...)` as shown [here](https://huggingface.co/docs/transformers/v4.34.1/en/model_doc/whisper#transformers.WhisperForConditionalGeneration.forward.example).
 
 ```python
 pipe = pipeline(
@@ -64,7 +64,7 @@ pipe = pipeline(
 )
 ```
 
-Next, we load an exemplary short-form audio from the LibriSpeech corpus:
+Next, we load an example short-form audio from the LibriSpeech corpus:
 
 ```python
 from datasets import load_dataset
