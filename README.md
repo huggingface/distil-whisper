@@ -4,7 +4,7 @@
 [[Models]](https://huggingface.co/collections/distil-whisper/distil-whisper-models-65411987e6727569748d2eb6)
 [[wandb]](https://wandb.ai/sanchit-gandhi/distil-whisper/workspace?workspace=user-sanchit-gandhi)
 
-Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% WER** on 
+Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% word error rate (WER)** on 
 out-of-distribution evaluation sets.
 
 | Model                                                                      | Params / M | Rel. Latency | Short-Form WER | Long-Form WER |
