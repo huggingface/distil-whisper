@@ -1,6 +1,6 @@
 # Distil-Whisper
 
-[[Paper]](./Distil_Whisper.pdf)
+[[Paper]](https://arxiv.org/abs/2311.00430)
 [[Models]](https://huggingface.co/collections/distil-whisper/distil-whisper-models-65411987e6727569748d2eb6)
 [[wandb]](https://wandb.ai/sanchit-gandhi/distil-whisper/workspace?workspace=user-sanchit-gandhi)
 
@@ -25,7 +25,7 @@ from transformers import WhisperForConditionalGeneration
 
 ## 2. Why use Distil-Whisper? ⁉️
 
-Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 4 reasons for making the
+Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 5 reasons for making the
 switch to Distil-Whisper:
 
 1. **Faster inference:** 6 times faster inference speed, while performing to within 1% WER of Whisper on out-of-distribution audio:
@@ -47,12 +47,13 @@ switch to Distil-Whisper:
 </p>
 
 4. **Designed for speculative decoding:** Distil-Whisper can be used as an assistant model to Whisper, giving 2 times faster inference speed while mathematically ensuring the same outputs as the Whisper model.
+5. **Permissive license:** Distil-Whisper is [MIT licensed](./LICENSE), meaning it can be used for commercial applications.
 
 ## 3. Approach ✍️
 
 To distill Whisper, we copy the entire encoder module and freeze it during training. We copy only two decoder layers, 
 which are initialised from the first and last decoder layers from Whisper. All other decoder layers from Whisper
-are discarded.
+are discarded:
 
 <p align="center">
   <img src="https://huggingface.co/datasets/distil-whisper/figures/resolve/main/architecture.png?raw=true" width="600"/>
@@ -72,8 +73,14 @@ This diverse audio dataset is paramount to ensuring robustness of Distil-Whisper
 In addition, we use a WER filter to discard pseudo-labels where Whisper mis-transcribes or hallucinates. This greatly 
 improves WER performance of the downstream distilled model.
 
-For full details on the distillation set-up and evaluation results, refer to the [Distil-Whisper paper](./Distil_Whisper.pdf).
+For full details on the distillation set-up and evaluation results, refer to the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430).
 
-## 4. Acknowledgements
+## 4. Training Code
+
+Training code to reproduce Distil-Whisper will be published here shortly. We will also release more general code to distill
+Whisper for multilingual speech recognition, facilitating anyone in the community to distill Whisper on their choice of 
+language.
+
+## 5. Acknowledgements
 * OpenAI for the original Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [codebase](https://github.com/openai/whisper)
 * Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) programme for Cloud TPU v4s
