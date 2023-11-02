@@ -2,7 +2,7 @@
 
 [[Paper]](https://arxiv.org/abs/2311.00430)
 [[Models]](https://huggingface.co/collections/distil-whisper/distil-whisper-models-65411987e6727569748d2eb6)
-[[wandb]](https://wandb.ai/sanchit-gandhi/distil-whisper/workspace?workspace=user-sanchit-gandhi)
+[[Colab]](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb)
 
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% word error rate (WER)** on 
 out-of-distribution evaluation sets.
@@ -88,6 +88,7 @@ print(result["text"])
 ```
 
 For more information on how to customize the automatic speech recognition pipeline, please refer to the ASR pipeline [docs](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+We also provide an end-to-end [Google Colab](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb) that benchmarks Whisper against Distil-Whisper.
 
 ### Long-Form Transcription
 
@@ -155,6 +156,7 @@ result = pipe("https://huggingface.co/datasets/sanchit-gandhi/librispeech_long/r
 --->
 
 For more information on how to customize the automatic speech recognition pipeline, please refer to the ASR pipeline [docs](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+
 ### Speculative Decoding
 
 Distil-Whisper can be used as an assistant model to Whisper for speculative decoding. As a refresher, we recommend reading Joao's [amazing blog post](https://huggingface.co/blog/assisted-generation) or taking a look at [the original paper](https://arxiv.org/abs/2211.17192).
