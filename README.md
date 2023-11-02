@@ -82,5 +82,32 @@ Whisper for multilingual speech recognition, facilitating anyone in the communit
 language.
 
 ## 5. Acknowledgements
-* OpenAI for the original Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [codebase](https://github.com/openai/whisper)
+* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
+* Hugging Face 🤗 [Transformers](https://github.com/huggingface/transformers) for the model integration
 * Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) programme for Cloud TPU v4s
+
+## 6. Citation
+
+If you use this model, please consider citing the Distil-Whisper paper:
+```
+@misc{gandhi2023distilwhisper,
+      title={Distil-Whisper: Robust Knowledge Distillation via Large-Scale Pseudo Labelling}, 
+      author={Sanchit Gandhi and Patrick von Platen and Alexander M. Rush},
+      year={2023},
+      eprint={2311.00430},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+```
+
+And also the Whisper paper:
+```
+@misc{radford2022robust,
+      title={Robust Speech Recognition via Large-Scale Weak Supervision}, 
+      author={Alec Radford and Jong Wook Kim and Tao Xu and Greg Brockman and Christine McLeavey and Ilya Sutskever},
+      year={2022},
+      eprint={2212.04356},
+      archivePrefix={arXiv},
+      primaryClass={eess.AS}
+}
+```
