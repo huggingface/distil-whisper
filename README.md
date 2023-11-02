@@ -233,6 +233,42 @@ print(result["text"])
 in VRAM memory usage while mathematically ensuring the same results. This makes it the perfect replacement for Whisper large-v2
 in existing speech recognition pipelines.
 
+### Additional Speed & Memory Improvements
+
+You can apply additional speed and memory improvements to Distil-Whisper which we cover in the following.
+
+#### Flash Attention
+
+We recommend using [Flash Attention 2](https://huggingface.co/docs/transformers/main/en/perf_infer_gpu_one#flashattention-2) if your GPU allows for it.
+To do so, you first need to install [Flash Attention](https://github.com/Dao-AILab/flash-attention):
+
+```
+pip install flash-attn --no-build-isolation
+```
+
+You can then pass `use_flash_attention_2=True` to `from_pretrained` to enable Flash Attention 2:
+
+```diff
+- model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True)
++ model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True, use_flash_attention_2=True)
+```
+
+#### Torch Scale-Product-Attention (SDPA)
+
+If your GPU does not support Flash Attention, we recommend making use of [BetterTransformers](https://huggingface.co/docs/transformers/main/en/perf_infer_gpu_one#bettertransformer).
+To do so, you first need to install optimum:
+
+```
+pip install --upgrade optimum
+```
+
+And then convert your model to a "BetterTransformer" model before using it:
+
+```diff
+model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True)
++ model = model.to_bettertransformer()
+```
+
 ## 2. Why use Distil-Whisper? ⁉️
 
 Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 5 reasons for making the
