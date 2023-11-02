@@ -7,10 +7,12 @@
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% WER** on 
 out-of-distribution evaluation sets.
 
-| Model              | Link                            |
-|--------------------|---------------------------------|
-| `distil-medium.en` | To be published on November 2nd |
-| `distil-large-v2`  | To be published on November 2nd |
+| Model                                                                      | Params / M | Rel. Latency | Short-Form WER | Long-Form WER |
+|----------------------------------------------------------------------------|------------|--------------|----------------|---------------|
+| [whisper-large-v2](https://huggingface.co/openai/whisper-large-v2)         | 1550       | 1.0          | **9.1**        | 11.7          |
+|                                                                            |            |              |                |               |
+| [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8          | 10.1           | **11.6**      |
+| [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | **394**    | **6.8**      | 11.1           | 12.4          |
 
 ## 1. Usage
 
