@@ -14,7 +14,7 @@ error rate (WER)** on out-of-distribution evaluation sets.
 | [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8          | 10.1           | **11.6**      |
 | [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | **394**    | **6.8**      | 11.1           | 12.4          |
 
-> **Note:** Distil-Whisper is currently only available for English speech recognition. Multilingual support will be provided soon.
+**Note:** Distil-Whisper is currently only available for English speech recognition. Multilingual support will be provided soon.
 
 ## 1. Usage
 
