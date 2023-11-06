@@ -29,10 +29,14 @@ pip install --upgrade transformers accelerate datasets[audio]
 
 ### Short-Form Transcription
 
+Short-form transcription is the process of transcribing audio samples that are less than 30-seconds long, which is the 
+maximum receptive field of the Whisper models. This means the entire audio clip can be processed in one go without the 
+need for chunking.
+
 First, we load Distil-Whisper via the convenient [`AutoModelForSpeechSeq2Seq`](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSpeechSeq2Seq) and [`AutoProcessor`](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoProcessor) classes.
 
 We load the model in `float16` precision and make sure that loading time takes as little time as possible by passing `low_cpu_mem_usage=True`.
-In addition, we want to make sure that the model is loaded in [`safetensors`](https://github.com/huggingface/safetensors) format by passing `use_safetensors=True`.
+In addition, we want to make sure that the model is loaded in [`safetensors`](https://github.com/huggingface/safetensors) format by passing `use_safetensors=True`:
 
 ```python
 import torch
@@ -94,8 +98,9 @@ We also provide an end-to-end [Google Colab](https://colab.research.google.com/g
 
 ### Long-Form Transcription
 
-Distil-Whisper uses a chunked algorithm to transcribe long-form audio files. In practice, this chunked long-form algorithm 
-is 9x faster than the sequential algorithm proposed by OpenAI in the Whisper paper (see Table 7 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
+Distil-Whisper uses a chunked algorithm to transcribe long-form audio files longer than 30-seconds. In practice, this 
+chunked long-form algorithm is 9x faster than the sequential algorithm proposed by OpenAI in the Whisper paper 
+(see Table 7 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
 
 We can load the model and processor as before:
 
@@ -132,6 +137,12 @@ pipe = pipeline(
     device=device,
 )
 ```
+
+The argument `max_new_tokens` controls the maximum number of generated tokens *per-chunk*. In the typical speech setting,
+we have no more than 3 words spoken per-second. Therefore, for a 15-second input, we have at most 45 words (approx 60 tokens).
+We set the maximum number of generated tokens per-chunk to 128 to truncate any possible hallucinations that occur at the 
+end of the segment. These tokens get removed at the chunk borders using the long-form chunking transcription algorithm, 
+so it is more efficient to truncate them directly during generation to avoid redundant generation steps in the decoder.
 
 Now, let's load a long-form audio sample. Here, we use an example of concatenated samples from the LibriSpeech corpus:
 
