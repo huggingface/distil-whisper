@@ -345,7 +345,7 @@ language.
 ## 5. Acknowledgements
 * OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
 * Hugging Face 🤗 [Transformers](https://github.com/huggingface/transformers) for the model integration
-* Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) programme for Cloud TPU v4s
+* Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) program for Cloud TPU v4s
 
 ## 6. Citation
 
