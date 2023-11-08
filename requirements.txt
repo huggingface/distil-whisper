@@ -1,0 +1,4 @@
+pip
+transformers
+accelerate
+datasets[audio]
