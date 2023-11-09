@@ -1,3 +1,4 @@
+
 ## STREAM WHISPER
 
 Well, I figured out distil-whisper would work better with stream capabilities, i.e ability to transcribe videos/audios from not just file paths, but also links/urls. So, stream-whisper was born.
@@ -12,3 +13,9 @@ In case you still haven't figured, stream whisper is a fork of huggingface's dis
 4. optionally, setup your variables in settings file.
 
 N.B: The original README.md of distil whisper is here.
+
+
+
+## CITATION
+
+

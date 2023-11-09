@@ -1,4 +1,6 @@
 pip
+torch
 transformers
 accelerate
 datasets[audio]
+yt-dlp
