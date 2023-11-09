@@ -82,22 +82,44 @@ def determine_audio_length(audio_path):
     else:
         return 'long'
 
+
+def download_audio(url, output_path):
+    command = ['yt-dlp', '-x', '-f', 'bestaudio', '--audio-format', 'flac', '-o', output_path, url]
+    subprocess.run(command, check=True)
+
+
+def process_url(url, args):
+    parsed_url = urllib.parse.urlparse(url)
+
+    if parsed_url.scheme in ['http', 'https']:
+        output_path = args.out if args.out else os.path.join(os.getcwd(), '%(title)s.%(ext)s')
+        download_audio(url, output_path)
+        stream_middle = output_path
+    elif os.path.isfile(url):
+        stream_middle = url
+    else:
+        raise ValueError(f"Invalid URL: {url}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--audio', type=str, default=None)
     # parser.add_argument('--length', type=str, default='short')
     # parser.add_argument('--category', type=str, default=None)
     # parser.add_argument('--speed', type=str, default=None)
-    parser.add_argument('--list', type=str, default=None)
 
-    parser.add_argument('url', type=str)
+    # parser.add_argument('url', type=str)
     parser.add_argument('--short', action='store_true')
     parser.add_argument('--long', action='store_true')
     parser.add_argument('--text', action='store_true')
-    parser.add_argument('--out', type=str, default='.')
+    # parser.add_argument('--out', type=str, default='.')
     parser.add_argument('--flash', action='store_true')
     parser.add_argument('--bt', action='store_true')
     parser.add_argument('--spec', action='store_true')
+
+    parser.add_argument('--list', type=str, default=None)
+    parser.add_argument('url', type=str, nargs='?', default=None)
+    parser.add_argument('--out', type=str, default='.')
 
     args = parser.parse_args()
 
@@ -105,12 +127,24 @@ def main():
 
     parsed_url = urllib.parse.urlparse(url)
 
-    yt-dlp -f bestaudio --extract-audio --audio-format flac <video_url>
+    if args.list:
+        with open(args.list, 'r') as f:
+            urls = f.read().splitlines()
+        for url in urls:
+            process_url(url, args)
+    elif args.url:
+        process_url(args.url, args)
+    else:
+        print("Please provide a URL or a list of URLs.")
+
+
+    # yt-dlp -f bestaudio --extract-audio --audio-format flac <video_url>
 
     if parsed_url.scheme in ['http', 'https']:
         # This is an internet URL, proceed with yt-dlp
         output_path = args.out if args.out else os.path.join(os.getcwd(), '%(title)s.%(ext)s')
         command = ['yt-dlp', '-x', '-f', 'bestaudio', '--audio-format', 'flac', '-o', output_path, url]
+        
         subprocess.run(command, check=True)
         stream_middle = output_path
     elif os.path.isfile(url):
