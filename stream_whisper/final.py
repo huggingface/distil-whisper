@@ -29,7 +29,7 @@ art = """       .-.                                            .-.    _
 
 colors = [Fore.RED, Fore.GREEN, Fore.YELLOW, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.WHITE]
 
-for char in art:
+for char in art:   
     print(random.choice(colors) + char, end="")
 
 
@@ -345,7 +345,7 @@ def main():
         parser.add_argument('--flash', action='store_true', help='use flash for speed processing')
         parser.add_argument('--bt', action='store_true', help='use better transformers')
         parser.add_argument('--spec', action='store_true', help='use speculative decoding processing')
-        parser.add_argument('-h', '--help', action='store_true', help='Show this help message and exit')
+        # parser.add_argument('-h', action='store_true', help='Show this help message and exit')
         parser.add_argument('--settings', type=str, default=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'settings.ini'), help='Path to settings file')
 
 
@@ -356,7 +356,7 @@ def main():
 
 
         parser.add_argument('--list', type=str, default=None, help='file containing list of urls or file paths of audio to be (downloaded before) transcribed')
-        parser.add_argument('url', type=str, nargs='?', default=None, help='URL to process')
+        parser.add_argument('url', type=str, nargs='?', default=None, help='the link is the only required argument👍🏽')
         parser.add_argument('--out', type=str, default='both', help='Audio output path.')
 
         args = parser.parse_args()
@@ -365,13 +365,13 @@ def main():
             print_custom_help()
             parser.exit()
  """
-        if not any(vars(args).values()):
+        """ if not any(vars(args).values()):
             # print_custom_help()
             parser.print_help()
-            parser.exit()
+            parser.exit() """
 
 
-        url = args.url
+        # url = args.url
 
         if args.list:
             with open(args.list, 'r') as f:
@@ -383,12 +383,18 @@ def main():
         else:
             print("Please provide a URL or a list file of URLs.")
 
-    except (argparse.ArgumentError, argparse.ArgumentTypeError):
+    except Exception as e:
+        print(e)
         # print_custom_help()
         # parser.print_help()
-        parser.print_help()
-        parser.exit()
+        # parser.print_help()
+        # parser.exit()
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
