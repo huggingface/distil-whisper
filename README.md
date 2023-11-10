@@ -9,9 +9,10 @@ In case you still haven't figured, stream whisper is a fork of huggingface's dis
 
 1. Clone or download this repository
 2. install the requirements with pip:
+
    
 		pip install requirements.txt
- NB: If this fails, try `pip3 install requirements.txt` instead
+ NB: If this fails, try `pip3 install requirements.txt` instead.
 3. from the root directory, run:
 
         cd stream_whisper
