@@ -6,7 +6,7 @@ import platform
 from pydub import AudioSegment
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline, AutoModelForCausalLM
-from datasets import load_dataset
+# from datasets import load_dataset
 import configparser
 import time
 import filetype
@@ -15,6 +15,7 @@ from watchdog.events import FileSystemEventHandler
 from colorama import Fore, Style, init
 import random
 from importlib.metadata import distribution, PackageNotFoundError
+import re
 
 
 init(autoreset=True)
@@ -140,9 +141,9 @@ def determine_audio_length(audio_path):
         return 'long'
 
 
-def download_audio(url, output_path):
+""" def download_audio(url, output_path):
     command = ['yt-dlp', '-x', '-f', 'bestaudio', '--audio-format', 'flac', '-o', output_path, url]
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True) """
 
 def download_audio(url, output_path):
     command = ['yt-dlp', '-x', '-f', 'bestaudio', '--audio-format', 'flac', '-o', output_path, url]
@@ -151,10 +152,27 @@ def download_audio(url, output_path):
 def process_url(url, args):
     parsed_url = urllib.parse.urlparse(url)
     global new_file_path
+    global sample
+
     new_file_path = None
 
+    def sanitize_path(path):
+        # Remove spaces and other non-alphanumeric characters
+        return re.sub(r'\W+', '', path)
+
+
     if parsed_url.scheme in ['http', 'https']:
-        output_path = args.out if args.out else os.path.join(os.getcwd(), '%(title)s.%(ext)s')
+        if args.out:
+            output_path = sanitize_path(args.out)
+            # Check if an extension is provided
+            if not output_path.lower().endswith(('.mp3', '.flac')):
+                # Strip the extension and add .flac
+                output_path = os.path.splitext(output_path)[0] + '.flac'
+        else:
+            # Generate a unique filename
+            output_path = os.path.join(os.getcwd(), sanitize_path('%(title)s.%(ext)s'))
+    
+        # output_path = args.out if args.out else os.path.join(os.getcwd(), '%(title)s.%(ext)s')
         download_audio(url, output_path)
         kind = filetype.guess(output_path)
         if kind is None:
@@ -194,7 +212,7 @@ def process_url(url, args):
     elif os.path.isfile(url):
         stream_middle = url
     else:
-        raise ValueError(f"Invalid URL: {url}")
+        raise ValueError(f"Invalid file or http link: {url}")
 
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -203,11 +221,13 @@ def process_url(url, args):
     model_id = "distil-whisper/distil-large-v2"
 
     if args.flash:
+        print("using flash...")
         install_flash_attention()
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True, use_flash_attention_2=True
         )
     elif args.bt:
+        print("using bettertransformers")
         install_optimum()
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
@@ -220,9 +240,12 @@ def process_url(url, args):
 
     model.to(device)
 
+    print("bain-one")
+
     processor = AutoProcessor.from_pretrained(model_id)
 
     if args.spec:
+        print("using speculative decoding")
         model_id = "openai/whisper-large-v2"
         assistant_model_id = "distil-whisper/distil-large-v2"
         assistant_model = AutoModelForCausalLM.from_pretrained(
@@ -242,6 +265,7 @@ def process_url(url, args):
             device=device,
         )
     else:
+        print("normal decoding enabled")
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -251,13 +275,18 @@ def process_url(url, args):
             torch_dtype=torch_dtype,
             device=device,
         )
-    if args.audio is None:
-        dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    """ if args.out is not None:
+        # dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
         sample = dataset[0]["audio"]
     else:
-        sample = stream_middle
+        sample = stream_middle """
+
+    # global sample = stream_middle
+
+    sample = stream_middle
 
     if args.long:
+        print("long sample decoding")
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -270,6 +299,8 @@ def process_url(url, args):
             device=device,
         )   
     elif args.short:
+        print("short sample decoding")
+        print("your audio must strictly be less than 30 seconds for this to give useful results")
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -280,9 +311,12 @@ def process_url(url, args):
             device=device,
         )
     else:
-        size = determine_audio_length(in_file)
+        print("automatic audio length detection activated")
+        
+        size = determine_audio_length(sample)
 
         if size == 'short':
+            print("I have detected short audio length")
             pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -293,6 +327,7 @@ def process_url(url, args):
             device=device,
         )
         elif size == 'long':
+            print("I have detected long audio length")
             pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -309,9 +344,15 @@ def process_url(url, args):
             print("Please check your audio file")
             print("Otherwise you can specify the --long argument to save me the stress of automatic audio length detection.")
 
+        print("bain-two")
+        # print(sample)
+
 
     result = pipe(sample)
-    if args.text == 'cli':
+    print(result)
+    print("bain-three")
+
+    """ if args.text == 'cli':
         print(result["text"])
     elif args.text == 'both':
         print(result["text"])
@@ -323,7 +364,24 @@ def process_url(url, args):
             with open(args.text, 'w') as output:
                 output.write(result["text"])
         except Exception as e:
+            print(f"Failed to write to output file: {e}") """
+
+
+    if args.text is None or args.text == 'both':
+        print(result["text"])
+        with open('output.txt', 'w') as output:
+            output.write(result["text"])
+    elif args.text == 'cli':
+        print(result["text"])
+    else:
+        try:
+            os.makedirs(os.path.dirname(args.text), exist_ok=True)
+            with open(args.text, 'w') as output:
+                output.write(result["text"])
+        except Exception as e:
             print(f"Failed to write to output file: {e}")
+
+
 
 def main():
     print("initializing stream-whisper...")
@@ -373,15 +431,19 @@ def main():
 
         # url = args.url
 
-        if args.list:
-            with open(args.list, 'r') as f:
-                urls = f.read().splitlines()
-            for url in urls:
-                process_url(url, args)
-        elif args.url:
-            process_url(args.url, args)
-        else:
-            print("Please provide a URL or a list file of URLs.")
+        
+        try:
+            if args.list:
+                with open(args.list, 'r') as f:
+                    urls = f.read().splitlines()
+                for url in urls:
+                    process_url(url, args)
+            elif args.url:
+                process_url(args.url, args)
+            else:
+                print("Please provide a URL or a list file of URLs.")
+        except Exception as e:
+            print(e)
 
     except Exception as e:
         print(e)
