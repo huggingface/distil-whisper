@@ -169,7 +169,11 @@ def process_url(url, args):
             except subprocess.CalledProcessError:
                 print('Error converting file to .flac')
                 config = configparser.ConfigParser()
-                config.read(os.path.dirname(os.path.realpath(__file__)) + '/settings.ini')
+                if args.settings:
+                    config.read(args.settings)
+                else:
+                    config.read(os.path.dirname(os.path.realpath(__file__)) + '/settings.ini')
+
                 if config.getboolean('DEFAULT', 'interactive', fallback=False):
                     print(f"Downloaded audio at {output_path} is corrupted. Please check or manually convert it to .mp3 or .flac.")
                     if input("Should I wait for you to do that? (yes/no) ").lower() == 'yes':
@@ -251,7 +255,7 @@ def process_url(url, args):
         dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
         sample = dataset[0]["audio"]
     else:
-        sample = args.audio
+        sample = stream_middle
 
     if args.long:
         pipe = pipeline(
@@ -307,16 +311,16 @@ def process_url(url, args):
 
 
     result = pipe(sample)
-    if args.out == 'cli':
+    if args.text == 'cli':
         print(result["text"])
-    elif args.out == 'both':
+    elif args.text == 'both':
         print(result["text"])
         with open('output.txt', 'w') as output:
             output.write(result["text"])
     else:
         try:
-            os.makedirs(os.path.dirname(args.out), exist_ok=True)
-            with open(args.out, 'w') as output:
+            os.makedirs(os.path.dirname(args.text), exist_ok=True)
+            with open(args.text, 'w') as output:
                 output.write(result["text"])
         except Exception as e:
             print(f"Failed to write to output file: {e}")
@@ -353,7 +357,7 @@ def main():
 
         parser.add_argument('--list', type=str, default=None, help='file containing list of urls or file paths of audio to be (downloaded before) transcribed')
         parser.add_argument('url', type=str, nargs='?', default=None, help='URL to process')
-        parser.add_argument('--out', type=str, default='both', help='Transcription output path.')
+        parser.add_argument('--out', type=str, default='both', help='Audio output path.')
 
         args = parser.parse_args()
 

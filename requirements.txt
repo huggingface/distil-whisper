@@ -4,3 +4,7 @@ transformers
 accelerate
 datasets[audio]
 yt-dlp
+pydub
+filetype
+watchdog
+colorama
