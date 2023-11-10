@@ -284,6 +284,21 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, torch_dtype=torch_dt
 + model = model.to_bettertransformer()
 ```
 
+### Exporting to Other Libraries
+
+Distil-Whisper has support in the following libraries with the original "sequential" long-form transcription algorithm. 
+Click the links in the table to see the relevant code-snippets for each:
+
+| Library         | distil-medium.en                                                                                 | distil-large-v2                                                                                 |
+|-----------------|--------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| OpenAI Whisper  | [link](https://huggingface.co/distil-whisper/distil-medium.en#running-whisper-in-openai-whisper) | [link](https://huggingface.co/distil-whisper/distil-large-v2#running-whisper-in-openai-whisper) |
+| Whisper cpp     | [link](https://huggingface.co/distil-whisper/distil-medium.en#whispercpp)                        | [link](https://huggingface.co/distil-whisper/distil-large-v2#whispercpp)                        |
+| Transformers js | [link](https://huggingface.co/distil-whisper/distil-medium.en#transformersjs)                    | [link](https://huggingface.co/distil-whisper/distil-large-v2#transformersjs)                    |
+| Candle (Rust)   | [link](https://huggingface.co/distil-whisper/distil-medium.en#candle)                            | [link](https://huggingface.co/distil-whisper/distil-large-v2#candle)                            |
+
+Updates will be posted here with the integration of the "chunked" long-form transcription algorithm into the respective 
+libraries.
+
 ## 2. Why use Distil-Whisper? ⁉️
 
 Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 5 reasons for making the
