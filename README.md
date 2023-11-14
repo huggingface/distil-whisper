@@ -299,6 +299,8 @@ Click the links in the table to see the relevant code-snippets for each:
 Updates will be posted here with the integration of the "chunked" long-form transcription algorithm into the respective 
 libraries.
 
+For the 🤗 Transformers code-examples, refer to the sections [Short-Form](#short-form-transcription) and [Long-Form](#long-form-transcription) Transcription.
+
 ## 2. Why use Distil-Whisper? ⁉️
 
 Distil-Whisper is designed to be a drop-in replacement for Whisper on English speech recognition. Here are 5 reasons for making the
