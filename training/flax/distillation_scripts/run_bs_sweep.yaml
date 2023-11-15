@@ -1,0 +1,67 @@
+command:
+  - python3
+  - ${program}
+  - --do_train
+  - --use_scan
+  - --gradient_checkpointing
+  - --overwrite_output_dir
+  - --predict_with_generate
+  - --freeze_encoder
+  - --streaming
+  - --use_auth_token
+  - --compilation_cache
+  - ${args}
+method: grid
+metric:
+  goal: minimize
+  name: train/loss
+parameters:
+  model_name_or_path:
+    value: distil-whisper/large-32-2
+  teacher_model_name_or_path:
+    value: openai/whisper-large-v2
+  train_dataset_name:
+    value: librispeech_asr
+  train_dataset_config_name:
+    value: all
+  train_split_name:
+    value: train.other.500
+  train_dataset_samples:
+    value: 100
+  cache_dir:
+    value: /fsx/sanchitgandhi/cache
+  dataset_cache_dir:
+    value: /fsx/sanchitgandhi/cache
+  output_dir:
+    value: ./
+  per_device_train_batch_size:
+    values:
+      - 128
+      - 256
+      - 512
+  precision:
+    values:
+      - "full_mixed"
+      - "half_mixed"
+  dtype:
+    value: bfloat16
+  do_eval:
+    value: false
+  learning_rate:
+    value: 3e-4
+  lr_scheduler_type:
+    value: constant_with_warmup
+  warmup_steps:
+    value: 30
+  max_steps:
+    value: 30
+  save_steps:
+    value: 51  # don't save checkpoints during sweep
+  dataloader_num_workers:
+    value: 48
+  logging_steps:
+    value: 5
+  wer_threshold:
+    value: 100
+program: run_distillation.py
+project: distil-whisper-sweeps

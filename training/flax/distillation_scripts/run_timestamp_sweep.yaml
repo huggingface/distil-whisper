@@ -1,0 +1,76 @@
+command:
+  - python3
+  - ${program}
+  - --do_train
+  - --do_eval
+  - --use_scan
+  - --gradient_checkpointing
+  - --overwrite_output_dir
+  - --predict_with_generate
+  - --freeze_encoder
+  - --streaming
+  - --use_auth_token
+  - --compilation_cache
+  - --return_timestamps
+  - ${args}
+method: grid
+metric:
+  goal: minimize
+  name: eval/wer
+parameters:
+  model_name_or_path:
+    value: distil-whisper/large-32-2
+  teacher_model_name_or_path:
+    value: openai/whisper-large-v2
+  train_dataset_name:
+    value: librispeech_asr-timestamped+librispeech_asr-timestamped+librispeech_asr-timestamped+common_voice_13_0-timestamped+voxpopuli-timestamped+ami-ihm-timestamped+ami-sdm-timestamped+peoples_speech-clean-timestamped+tedlium-timestamped+switchboard-data+gigaspeech-l-timestamped+spgispeech-timestamped
+  train_dataset_config_name:
+    value: all+all+all+en+en+ihm+sdm+clean+release3+all+l+L
+  train_split_name:
+    value: train.clean.100+train.clean.360+train.other.500+train+train+train+train+train+train+train+train+train
+  train_dataset_samples:
+    value: 2.9+10.4+14.9+89+18.2+10.9+10.9+288+26.8+371.2+226.6+192.7
+  timestamp_probability:
+    values:
+      - 0.0
+      - 0.2
+      - 0.4
+      - 0.6
+      - 0.8
+      - 1.0
+  round_timestamps:
+    values:
+      - True
+      - False
+  eval_dataset_name:
+    value: "distil-whisper/gigaspeech-l"
+  eval_dataset_config_name:
+    value: "l"
+  cache_dir:
+    value: /home/sanchitgandhi/.cache
+  dataset_cache_dir:
+    value: /home/sanchitgandhi/.cache
+  output_dir:
+    value: ./
+  per_device_train_batch_size:
+    value: 64
+  dtype:
+    value: bfloat16
+  learning_rate:
+    value: 1e-4
+  lr_scheduler_type:
+    value: constant_with_warmup
+  warmup_steps:
+    value: 50
+  max_steps:
+    value: 2500
+  save_steps:
+    value: 2501  # don't save checkpoints during sweep
+  dataloader_num_workers:
+    value: 48
+  logging_steps:
+    value: 25
+  wer_threshold:
+    value: 10
+program: run_distillation.py
+project: distil-whisper-sweeps

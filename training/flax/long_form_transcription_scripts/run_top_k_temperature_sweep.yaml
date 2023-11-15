@@ -1,0 +1,51 @@
+command:
+  - python3
+  - ${program}
+  - --streaming
+  - --do_sample
+  - ${args}
+method: grid
+metric:
+  goal: minimize
+  name: tedlium-long-form/validation/wer
+parameters:
+  model_name_or_path:
+    value: sanchit-gandhi/large-32-2-ts-freeze-28k-wer-10
+  subfolder:
+    value: checkpoint-15000
+  dataset_name:
+    value: distil-whisper/tedlium-long-form
+  dataset_config_name:
+    value: all
+  dataset_split_name:
+    value: validation
+  cache_dir:
+    value: /home/sanchitgandhi/.cache
+  dataset_cache_dir:
+    value: /home/sanchitgandhi/.cache
+  output_dir:
+    value: ./
+  wandb_dir:
+    value: /home/sanchitgandhi/.cache
+  per_device_eval_batch_size:
+    value: 32
+  dtype:
+    value: bfloat16
+  report_to:
+    value: wandb
+  generation_num_beams:
+    value: 1
+  generation_max_length:
+    value: 256
+  temperature:
+    values:
+      - 0.2
+      - 0.4
+      - 0.6
+      - 0.8
+      - 1.0
+      - 1.2
+  chunk_length_s:
+    value: 20
+program: run_long_form_transcription.py
+project: distil-whisper-long-form

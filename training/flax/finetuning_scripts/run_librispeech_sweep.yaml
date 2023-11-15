@@ -1,0 +1,60 @@
+command:
+  - python3
+  - ${program}
+  - --do_train
+  - --do_eval
+  - --use_scan
+  - --gradient_checkpointing
+  - --overwrite_output_dir
+  - --predict_with_generate
+  - ${args}
+method: random
+metric:
+  goal: minimize
+  name: eval/wer
+parameters:
+  model_name_or_path:
+    value: distil-whisper/large-32-2
+  dataset_name:
+    value: distil-whisper/librispeech_asr
+  dataset_config_name:
+    value: all
+  train_split_name:
+    value: train.clean.100+train.clean.360+train.other.500
+  eval_split_name:
+    value: validation.clean
+  text_column_name:
+    value: whisper_transcript
+  cache_dir:
+    value: /home/sanchitgandhi/cache
+  dataset_cache_dir:
+    value: /home/sanchitgandhi/cache
+  output_dir:
+    value: ./
+  per_device_train_batch_size:
+    value: 32
+  per_device_eval_batch_size:
+    value: 16
+  dtype:
+    value: bfloat16
+  learning_rate:
+    distribution: log_uniform
+    max: -6.91
+    min: -11.51
+  warmup_steps:
+    value 500
+  num_train_epochs:
+    value: 1
+  preprocessing_num_workers:
+    value: 16
+  dataloader_num_workers:
+    value: 16
+  logging_steps:
+    value: 25
+  freeze_encoder:
+    values:
+      - True
+      - False
+
+program: run_finetuning.py
+project: distil-whisper

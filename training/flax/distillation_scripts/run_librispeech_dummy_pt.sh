@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+accelerate launch --mixed_precision=bf16 --num_processes=1 run_distillation_pt.py \
+  --model_name_or_path "distil-whisper/tiny-random-whisper-2-1" \
+  --teacher_model_name_or_path "distil-whisper/tiny-random-whisper" \
+  --train_dataset_name "distil-whisper/librispeech_asr_dummy" \
+  --train_dataset_config_name "clean" \
+  --train_dataset_samples "100" \
+  --train_split_name "validation" \
+  --eval_dataset_name "distil-whisper/librispeech_asr_dummy" \
+  --eval_dataset_config_name "clean" \
+  --eval_split_name "validation" \
+  --eval_text_column_name "text" \
+  --cache_dir "/home/sanchit/.cache" \
+  --dataset_cache_dir "/home/sanchit/.cache" \
+  --wandb_project "distil-whisper-debug" \
+  --output_dir "./" \
+  --do_train \
+  --do_eval \
+  --learning_rate 1e-4 \
+  --warmup_steps 25 \
+  --per_device_train_batch_size 8 \
+  --per_device_eval_batch_size 8 \
+  --gradient_checkpointing \
+  --max_steps 100 \
+  --eval_steps 50 \
+  --save_steps 50 \
+  --dataloader_num_workers 14 \
+  --wer_threshold 10 \
+  --logging_steps 5 \
+  --overwrite_output_dir \
+  --dtype bfloat16 \
+  --predict_with_generate \
+  --freeze_encoder \
+  --streaming False

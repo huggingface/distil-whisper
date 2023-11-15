@@ -1,0 +1,72 @@
+command:
+  - python3
+  - ${program}
+  - --do_train
+  - --do_eval
+  - --use_scan
+  - --gradient_checkpointing
+  - --overwrite_output_dir
+  - --predict_with_generate
+  - --freeze_encoder
+  - --streaming
+  - --use_auth_token
+  - ${args}
+method: grid
+metric:
+  goal: minimize
+  name: gigaspeech-l/validation/wer
+parameters:
+  model_name_or_path:
+    value: distil-whisper/large-32-2
+  teacher_model_name_or_path:
+    value: openai/whisper-large-v2
+  train_dataset_name:
+    value: librispeech_asr-timestamped+librispeech_asr-timestamped+librispeech_asr-timestamped+common_voice_13_0-timestamped+voxpopuli-timestamped+ami-ihm-timestamped+ami-sdm-timestamped+peoples_speech-clean-timestamped+tedlium-timestamped+switchboard-data+gigaspeech-l-timestamped+librispeech_asr-prompted+librispeech_asr-prompted+librispeech_asr-prompted+tedlium-prompted
+  train_dataset_config_name:
+    value: all+all+all+en+en+ihm+sdm+clean+release3+all+l+all+all+all+release3
+  train_split_name:
+    value: train.clean.100+train.clean.360+train.other.500+train+train+train+train+train+train+train+train+train.clean.100+train.clean.360+train.other.500+train
+  train_dataset_samples:
+    value: 2.9+10.4+14.9+89+18.2+10.9+10.9+288+26.8+371.2+226.6+2.9+10.4+14.9+26.8
+  eval_dataset_name:
+    value: librispeech_asr+librispeech_asr+common_voice_13_0+voxpopuli+ami-ihm+ami-sdm+peoples_speech-clean+tedlium+switchboard-data+gigaspeech-l+spgispeech+chime4+google/fleurs
+  eval_dataset_config_name:
+    value: all+all+en+en+ihm+sdm+clean+release3+all+l+L+1-channel+en_us
+  eval_split_name:
+    value: validation.clean+validation.other+validation+validation+validation+validation+validation+validation+validation+validation+validation+validation+validation
+  eval_text_column_name:
+    value: text+text+text+text+text+text+text+text+text+text+text+text+transcription
+  cache_dir:
+    value: /home/sanchitgandhi/.cache
+  dataset_cache_dir:
+    value: /home/sanchitgandhi/.cache
+  output_dir:
+    value: ./
+  per_device_train_batch_size:
+    value: 64
+  per_device_eval_batch_size:
+    value: 64
+  dtype:
+    value: bfloat16
+  learning_rate:
+    value: 1e-4
+  lr_scheduler_type:
+    value: constant_with_warmup
+  warmup_steps:
+    value: 50
+  max_steps:
+    value: 10000
+  save_steps:
+    value: 10001  # don't save checkpoints during sweep
+  dataloader_num_workers:
+    value: 48
+  logging_steps:
+    value: 25
+  wer_threshold:
+    value: 10
+  kl_weight:
+    values:
+      - 0.0
+      - 1.0
+program: run_distillation.py
+project: distil-whisper-sweeps

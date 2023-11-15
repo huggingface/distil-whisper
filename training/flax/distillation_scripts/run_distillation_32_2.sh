@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=10000000000 python3 run_distillation.py \
+  --model_name_or_path "distil-whisper/large-32-2" \
+  --teacher_model_name_or_path "openai/whisper-large-v2" \
+  --train_dataset_config_name "all+all+all+l" \
+  --train_dataset_samples "100+360+500+2500" \
+  --train_dataset_name "librispeech_asr-token-ids+librispeech_asr-token-ids+librispeech_asr-token-ids+gigaspeech-l-token-ids" \
+  --train_split_name "train.clean.100+train.clean.360+train.other.500+train" \
+  --eval_dataset_name "librispeech_asr+librispeech_asr+gigaspeech-l" \
+  --eval_dataset_config_name "all+all+l" \
+  --eval_split_name "validation.clean+validation.other+validation" \
+  --eval_text_column_name "text+text+text" \
+  --eval_steps 5000 \
+  --save_steps 5000 \
+  --warmup_steps 50 \
+  --learning_rate 0.0001 \
+  --lr_scheduler_type "constant_with_warmup" \
+  --logging_steps 25 \
+  --save_total_limit 1 \
+  --max_steps 10000 \
+  --wer_threshold 10 \
+  --per_device_train_batch_size 64 \
+  --per_device_eval_batch_size 64 \
+  --dataloader_num_workers 16 \
+  --cache_dir "/home/sanchitgandhi/.cache" \
+  --dataset_cache_dir "/home/sanchitgandhi/.cache" \
+  --dtype "bfloat16" \
+  --output_dir "./" \
+  --wandb_name "large-32-2-ls-gs-token-ids" \
+  --wandb_dir "/home/sanchitgandhi/.cache" \
+  --wandb_project "distil-whisper" \
+  --do_train \
+  --do_eval \
+  --use_scan \
+  --gradient_checkpointing \
+  --overwrite_output_dir \
+  --predict_with_generate \
+  --freeze_encoder \
+  --streaming \
+  --use_auth_token \
+  --push_to_hub
