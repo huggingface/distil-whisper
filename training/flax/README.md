@@ -27,7 +27,7 @@ Distil-Whisper is written in Python, JAX and Flax, and heavily leverages the Fla
 
 ```bash
 git clone https://github.com/huggingface/distil-whisper.git
-cd distil-whisper/training
+cd distil-whisper/training/flax
 pip install -e .
 ```
 
