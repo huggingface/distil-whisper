@@ -776,7 +776,8 @@ def main():
         for step, batch in enumerate(batches):
             file_ids = batch.pop("file_ids")
             # Generate predictions and pad to max generated length
-            generated_ids = model.module.generate(batch["input_features"].to(dtype=torch_dtype), **gen_kwargs)
+            generate_fn = model.module.generate if accelerator.num_processes > 1 else model.generate
+            generated_ids = generate_fn(batch["input_features"].to(dtype=torch_dtype), **gen_kwargs)
             generated_ids = accelerator.pad_across_processes(generated_ids, dim=1, pad_index=tokenizer.pad_token_id)
             # Gather all predictions and targets
             file_ids, generated_ids, labels = accelerator.gather_for_metrics(
