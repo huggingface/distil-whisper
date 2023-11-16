@@ -24,61 +24,6 @@ on the Common Voice dataset. Note that this dataset only contains ~20 hours of a
 quickly, but does not provide sufficient data to achieve optimal performance. We recommend training on upwards of 10k 
 hours of data should you want to match the performance of Whisper on high-resource languages.
 
-## Overview of Training Methods
-
-### 1. Fine-Tuning
-
-For fine-tuning, we take the original Whisper checkpoint and train it on one or more datasets using the standard 
-cross-entropy loss. As such, there is no involvement from the teacher checkpoint during training, and so the fine-tuned 
-model is permitted to *overfit* to the distribution of the training data we provide. This makes it appealing for "low-resource" 
-languages where the original Whisper model performs poorly, since we can boost the performance of the model on a single 
-language by *overfitting* to that distribution of data. Note that this means the fine-tuned model is prone to loosing 
-its robustness to different audio distributions, which is the trade-off with improving performance on a specified dataset.
-
-As a rule of thumb, fine-tuning is appropriate for languages where the original Whisper model performs > 20% WER, and we 
-have a relatively small quantity of training data available (< 100 hours). With fine-tuning, we require as little as **10 hours**
-of training data to significantly boost the performance of the Whisper model. For an in-depth guide to fine-tuning Whisper,
-the reader is advised to refer to the blog post: [Fine-Tune Whisper For Multilingual ASR with 🤗 Transformers](https://huggingface.co/blog/fine-tune-whisper).
-
-### 2. Shrink and Fine-Tune
-
-For shrink and fine-tune (SFT), we first *shrink* the teacher model to a smaller student model by copying maximally 
-spaced layers, and then *fine-tune* the student model on the cross-entropy loss as described above. Typically, we retain 
-the full encoder from the Whisper model and only shrink the decoder. Retaining the entire encoder helps significantly with
-maintaining Whisper's robustness to different audio distributions (_c.f._ Section 9.3 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
-
-We can either train the student model on a dataset of (audio, text) pairs as above. Or, we can use the pre-trained 
-Whisper model to generate *pseudo-labels* for our audio data, and train on the (audio, pseudo-label) pairs.
-
-Pseudo-labels can be used when either:
-1. The original text transcriptions are normalised (lower-cased or no punctuation): the Whisper generated pseudo-labels contain both punctuation and casing, and so can be used as a substitute for the normalised transcriptions
-2. The pre-trained Whisper model achieves < 20% WER on the languages: we then know the majority of the pseudo-labels will be accurate enough for us to train on.
-
-They are not recommended when both of the following are true:
-1. The original text is punctuated and cased
-2. The pre-trained Whisper model achieves > 20% WER on the languages: in this case, we want to overfit to the particular distribution of the language, and so train directly on the original text data
-
-To discard inaccurate pseudo-labels during training, we employ a simple WER heuristic to filter our pseudo-labelled 
-training data. We first normalise the original text and the pseudo-labelled text using the Whisper normaliser. If the 
-WER between the normalised text exceeds a 10% WER threshold, we discard the training sample. Else, we retain it for training.
-Section 9.1 of the Distil-Whisper [paper](https://arxiv.org/abs/2311.00430) demonstrates the importance of using this 
-threshold for training.
-
-### 3. KL Divergence
-
-In the KL Divergence setting, the student model is initialised by shrinking the teacher as before, and then trained to 
-match the predictions of the teacher during training. 
-
-### Summary of Methods
-
-The following table summarises the three training methods and the minimum suggested WER / training data for each:
-
-| Method      | Pre-Trained WER / % | Training Data / h |
-|-------------|---------------------|-------------------|
-| Fine-tuning | > 20                | < 100             |
-| PL          | < 20                | > 100             |
-| KD          | < 20                | > 100             |
-
 ## Requirements
 
 The Distil-Whisper training code is written in [PyTorch](https://pytorch.org) and [Accelerate](https://huggingface.co/docs/accelerate/index). 
@@ -116,28 +61,31 @@ huggingface-cli login
 ```
 And then enter an authentication token from https://huggingface.co/settings/tokens. Create a new token if you do not have one already. You should make sure that this token has "write" privileges.
 
-To confirm that you have a working environment, you can run the following code cell to stream one sample of data from the 
-LibriSpeech dataset, and check that you can perform a forward pass of the "tiny" Whisper model:
+To confirm that you have a working environment, first accept the terms of use of the Common Voice 13 dataset on the Hub: https://huggingface.co/datasets/mozilla-foundation/common_voice_13_0 
+
+You can run the following code cell to stream one sample of data from the Common Voice dataset, and check that you can 
+perform inference using the "tiny" Whisper model:
 
 ```python
-import torch
-from transformers import WhisperFeatureExtractor, WhisperForConditionalGeneration
-from datasets import load_dataset
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from datasets import load_dataset, Audio
 
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny", low_cpu_mem_usage=True)
-feature_extractor = WhisperFeatureExtractor.from_pretrained("openai/whisper-tiny")
+processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
 
 model.to("cuda")
 
-librispeech_asr = load_dataset("librispeech_asr", "clean", split="validation", streaming=True)
+common_voice = load_dataset("mozilla-foundation/common_voice_13_0", "en", split="validation", streaming=True)
+common_voice = common_voice.cast_column("audio", Audio(sampling_rate=processor.feature_extractor.sampling_rate))
 
-inputs = feature_extractor(next(iter(librispeech_asr))["audio"]["array"], sampling_rate=16000, return_tensors="pt")
+inputs = processor(next(iter(common_voice))["audio"]["array"], sampling_rate=16000, return_tensors="pt")
 input_features = inputs.input_features
 
-decoder_input_ids = torch.tensor([[1, 1]]) * model.config.decoder_start_token_id
-logits = model(input_features.to("cuda"), decoder_input_ids=decoder_input_ids.to("cuda")).logits
+generated_ids = model.generate(input_features.to("cuda"), max_new_tokens=128)
+pred_text = processor.decode(generated_ids[0], skip_special_tokens=True)
 
-print("Environment set up successful?", logits.shape[-1] == 51865)
+print("Pred text:", pred_text)
+print("Environment set up successful?", generated_ids.shape[-1] == 19)
 ```
 
 ## 1. Pseudo-Labelling
@@ -319,6 +267,9 @@ accelerate launch run_distillation.py \
 ```
 
 The above training script will take approximately TODO hours to complete on an 80 GB A100 GPU and yield a final WER of TODO%.
+Scaling to multiple GPUs using [distributed data parallelism (DDP)](https://pytorch.org/tutorials/beginner/ddp_series_theory.html)
+is trivial: simply run `accelerate config` and select the multi-GPU option, specifying the IDs of the GPUs you wish to use. The 
+above script can then be run using DDP with no code changes. 
 
 Training logs will be reported to TensorBoard and WandB, provided the relevant packages are available. An example of a 
 saved checkpoint pushed to the Hugging Face Hub can be found here: [TODO](TODO).
@@ -408,3 +359,59 @@ The argument `chunk_length_s` controls the length of the chunked audio samples. 
 length of audio the student model was trained on. If unsure about what value of `chunk_length_s` is optimal for your case,
 it is recommended to run a *sweep* over all possible values. A template script for running a [WandB sweep](https://docs.wandb.ai/guides/sweeps) 
 can be found under [`run_chunk_length_s_sweep.yaml`](flax/long_form_transcription_scripts/run_chunk_length_s_sweep.yaml).
+
+## Overview of Training Methods
+
+### 1. Fine-Tuning
+
+For fine-tuning, we take the original Whisper checkpoint and train it on one or more datasets using the standard 
+cross-entropy loss. As such, there is no involvement from the teacher checkpoint during training, and so the fine-tuned 
+model is permitted to *overfit* to the distribution of the training data we provide. This makes it appealing for "low-resource" 
+languages where the original Whisper model performs poorly, since we can boost the performance of the model on a single 
+language by *overfitting* to that distribution of data. Note that this means the fine-tuned model is prone to loosing 
+its robustness to different audio distributions, which is the trade-off with improving performance on a specified dataset.
+
+As a rule of thumb, fine-tuning is appropriate for languages where the original Whisper model performs > 20% WER, and we 
+have a relatively small quantity of training data available (< 1000 hours). With fine-tuning, we require as little as **10 hours**
+of training data to significantly boost the performance of the Whisper model. For an in-depth guide to fine-tuning Whisper,
+the reader is advised to refer to the blog post: [Fine-Tune Whisper For Multilingual ASR with 🤗 Transformers](https://huggingface.co/blog/fine-tune-whisper).
+
+### 2. Shrink and Fine-Tune
+
+Shrink and fine-tune (SFT) is a knowledge distillation (KD) technique in which we first *shrink* the teacher model to a 
+smaller student model by copying maximally spaced layers, and then *fine-tune* the student model on the cross-entropy loss 
+as described above. Typically, we retain the full encoder from the Whisper model and only shrink the decoder. Retaining 
+the entire encoder helps significantly with maintaining Whisper's robustness to different audio distributions (_c.f._ 
+Section 9.3 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
+
+We can either train the student model on a dataset of (audio, text) pairs as above. Or, we can use the pre-trained 
+Whisper model to generate *pseudo-labels* for our audio data, and train on the (audio, pseudo-label) pairs.
+
+Pseudo-labels can be used when either:
+1. The original text transcriptions are normalised (lower-cased or no punctuation): the Whisper generated pseudo-labels contain both punctuation and casing, and so can be used as a substitute for the normalised transcriptions
+2. The pre-trained Whisper model achieves < 20% WER on the languages: we then know the majority of the pseudo-labels will be accurate enough for us to train on.
+
+They are not recommended when both of the following are true:
+1. The original text is punctuated and cased
+2. The pre-trained Whisper model achieves > 20% WER on the languages: in this case, we want to overfit to the particular distribution of the language, and so train directly on the original text data
+
+To discard inaccurate pseudo-labels during training, we employ a simple WER heuristic to filter our pseudo-labelled 
+training data. We first normalise the original text and the pseudo-labelled text using the Whisper normaliser. If the 
+WER between the normalised text exceeds a 10% WER threshold, we discard the training sample. Else, we retain it for training.
+Section 9.1 of the Distil-Whisper [paper](https://arxiv.org/abs/2311.00430) demonstrates the importance of using this 
+threshold for training.
+
+### 3. KL Divergence
+
+In the KL Divergence setting, the student model is initialised by shrinking the teacher as before, and then trained to 
+match the predictions of the teacher during training. 
+
+### Summary of Methods
+
+The following table summarises the two training paradigms: fine-tuning and knowledge distillation (KD). It suggests 
+minimum values for the pre-trained WER / training data to achieve reasonable performance:
+
+| Method      | Pre-Trained WER / % | Training Data / h |
+|-------------|---------------------|-------------------|
+| Fine-tuning | > 20                | < 1000            |
+| KD          | < 20                | > 1000            |
