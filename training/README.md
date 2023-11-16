@@ -11,15 +11,18 @@ If you are interested in reproducing the original Distil-Whisper checkpoints, we
 Otherwise, if you wish to distill Whisper on your own language/dataset, we recommend you use these scripts for ease of use
 and the configurability they provide.
 
-Reproducing the Distil-Whisper project requires three stages to be completed in successive order:
+Reproducing the Distil-Whisper project requires four stages to be completed in successive order:
 
 1. [Pseudo-labelling](#1-pseudo-labelling)
 2. [Initialisation](#2-initialisation)
 3. [Training](#3-training)
+4. [Evaluation](#4-evaluation)
 
-This README is partitioned according to the three stages. Each section provides a minimal example for running the
+This README is partitioned according to the four stages. Each section provides a minimal example for running the
 scripts used in the project. We will use a running example of distilling the Whisper model for Hindi speech recognition
-on the Common Voice dataset.
+on the Common Voice dataset. Note that this dataset only contains ~20 hours of audio data. Thus, it can be run extremely
+quickly, but does not provide sufficient data to achieve optimal performance. We recommend training on upwards of 10k 
+hours of data should you want to match the performance of Whisper on high-resource languages.
 
 ## Overview of Training Methods
 
@@ -328,7 +331,7 @@ There are a few noteworthy arguments that can be configured to give optimal trai
 5. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model
 6. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
 
-## Evaluation
+## 4. Evaluation
 
 There are two types of evaluation performed in Distil-Whisper:
 1. Short form: evaluation on audio samples less than 30s in duration. Examples include typical ASR test sets, such as the LibriSpeech validation set.
@@ -362,10 +365,10 @@ accelerate launch run_short_form_eval.py \
   --streaming
 ```
 
-It is particularly important to evaluate the final model on data that is *out-of-distribution (OOD)* with the data used
-to distill the model. Evaluating on OOD data provides insight as to how well the distilled model is likely to generalise
-to different audio distributions at inference time. In this example, Common Voice is *in-distribution (ID)*, since it is 
-taken from the same distribution as the Common Voice training set, whereas FLEURS is OOD.
+It is particularly important to evaluate the final model on data that is *out-of-distribution (OOD)* with the training data. 
+Evaluating on OOD data provides insight as to how well the distilled model is likely to generalise to different audio 
+distributions at inference time. In this example, Common Voice is *in-distribution (ID)*, since it is taken from the same 
+distribution as the Common Voice training set, whereas FLEURS is OOD, since it is not used as part of the training set.
 
 ### Long Form
 
@@ -374,25 +377,27 @@ inferred in parallel. The resulting transcriptions are then joined at the bounda
 A small overlap (or *stride*) is used between adjacent segments to ensure a continuous transcription across chunks.
 
 This style of chunked inference is performed using the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines)
-class, which is heavily inspired from [Whisper JAX](https://github.com/sanchit-gandhi/whisper-jax/tree/main#pipeline-usage).
+class, which provides a wrapper around the [`.generate`](https://huggingface.co/docs/transformers/model_doc/whisper#transformers.WhisperForConditionalGeneration.generate) 
+function for long-form inference.
 
-The script [`run_long_form_transcription.py`](run_long_form_transcription.py) can be used to evaluate the trained 
-student model on an arbitrary number of long-form evaluation sets. The following script demonstrates how to evaluate
-the example student model on two such test sets, [Earnings 21](https://huggingface.co/datasets/distil-whisper/earnings21) 
-and [Earnings 22](https://huggingface.co/datasets/distil-whisper/earnings22):
+The script [`run_long_form_eval.py`](run_long_form_eval.py) can be used to evaluate the trained student model on an 
+arbitrary number of long-form evaluation sets. Since we don't have a long-form validation set for Hindi to hand, we'll
+evaluate the teacher model on the TED-LIUM validation set in this example:
 
 ```bash
 #!/usr/bin/env bash
 
-python run_long_form_transcription.py \
-  --model_name_or_path "./large-32-2" \
-  --dataset_name "distil-whisper/earnings21+distil-whisper/earnings22" \
-  --dataset_config_name "default+default" \
-  --dataset_split_name "test+test+test+test" \
-  --text_column_name "transcription+transcription" \
-  --output_dir "./large-32-2" \
+python run_long_form_eval.py \
+  --model_name_or_path "openai/whisper-large-v2" \
+  --dataset_name "distil-whisper/tedlium-long-form" \
+  --dataset_config_name "all" \
+  --dataset_split_name "validation" \
+  --text_column_name "text" \
+  --output_dir "./" \
   --per_device_eval_batch_size 64 \
-  --chunk_length_s 15 \
+  --chunk_length_s 30 \
+  --language "en" \
+  --return_timestamps \
   --dtype "bfloat16" \
   --report_to "wandb" \
   --streaming
@@ -402,4 +407,4 @@ python run_long_form_transcription.py \
 The argument `chunk_length_s` controls the length of the chunked audio samples. It should be set to match the typical
 length of audio the student model was trained on. If unsure about what value of `chunk_length_s` is optimal for your case,
 it is recommended to run a *sweep* over all possible values. A template script for running a [WandB sweep](https://docs.wandb.ai/guides/sweeps) 
-can be found under [`run_chunk_length_s_sweep.yaml`](long_form_transcription_scripts/run_chunk_length_s_sweep.yaml).
+can be found under [`run_chunk_length_s_sweep.yaml`](flax/long_form_transcription_scripts/run_chunk_length_s_sweep.yaml).
