@@ -340,17 +340,6 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
     )
 
 
-def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.ndarray:
-    """
-    Shift label ids one token to the right.
-    """
-    shifted_label_ids = np.zeros_like(label_ids)
-    shifted_label_ids[:, 1:] = label_ids[:, :-1]
-    shifted_label_ids[:, 0] = decoder_start_token_id
-
-    return shifted_label_ids
-
-
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
     """
@@ -408,13 +397,14 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             return_tensors="pt",
         )
 
-        # replace padding with -100 to ignore correctly when computing the loss
-        labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
+        # shift labels to the right to get decoder input ids
+        labels = labels_batch["input_ids"]
+        decoder_input_ids = labels[:, :-1]
+        labels = labels[:, 1:]
+        labels_mask = labels_batch.attention_mask[:, 1:]
 
-        # if bos token is appended in previous tokenization step,
-        # cut bos token here as it's append later anyways
-        if set(torch.unique(labels[:, 0])).issubset({self.decoder_start_token_id, self.decoder_prev_token_id}):
-            labels = labels[:, 1:]
+        # replace padding with -100 to ignore correctly when computing the loss
+        labels = labels.masked_fill(labels_mask.ne(1), -100)
 
         # replace initial prompt tokens with -100 to ignore correctly when computing the loss
         bos_index = torch.argmax((labels == self.decoder_start_token_id).long(), dim=1)
@@ -422,6 +412,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         labels = torch.where(prompt_mask, -100, labels)
 
         batch["labels"] = labels
+        batch["decoder_input_ids"] = decoder_input_ids
 
         return batch
 
@@ -1135,7 +1126,7 @@ def main():
                 prompt_ids = [token for token in prompt_ids if token < timestamp_begin]
                 if len(prompt_ids) > 0:
                     # remove the standard task tokens and add the special <|startofprev|> token
-                    prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:]
+                    prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:-1]
                 if len(prompt_ids + token_ids) < max_label_length:
                     token_ids = prompt_ids + token_ids
             all_token_ids.append(token_ids)
