@@ -1,0 +1,10 @@
+torch>=1.10
+transformers>=4.35.1
+datasets[audio]>=2.14.7
+accelerate>=0.24.1
+jiwer
+evaluate>=0.4.1
+wandb
+tensorboard
+tensorflow-cpu
+nltk

@@ -1,0 +1,84 @@
+command:
+  - python3
+  - ${program}
+  - --do_train
+  - --do_eval
+  - --use_scan
+  - --gradient_checkpointing
+  - --overwrite_output_dir
+  - --predict_with_generate
+  - --streaming
+  - --use_auth_token
+  - ${args}
+method: random
+metric:
+  goal: minimize
+  name: eval/wer
+parameters:
+  model_name_or_path:
+    value: distil-whisper/large-32-2
+  teacher_model_name_or_path:
+    value: openai/whisper-large-v2
+  train_dataset_name:
+    value: librispeech_asr+librispeech_asr+librispeech_asr+common_voice_13_0+voxpopuli+ami-ihm+ami-sdm+peoples_speech-clean+tedlium+switchboard-data+gigaspeech-l+spgispeech
+  train_dataset_config_name:
+    value: all+all+all+en+en+ihm+sdm+clean+release3+all+l+L
+  train_split_name:
+    value: train.clean.100+train.clean.360+train.other.500+train+train+train+train+train+train+train+train+train
+  train_dataset_samples:
+    value: 100+360+500+2300+450+90+90+12000+450+3600+2500+5000
+  eval_dataset_name:
+    value: "distil-whisper/gigaspeech-l"
+  eval_dataset_config_name:
+    value: "l"
+  cache_dir:
+    value: /home/sanchitgandhi/cache
+  dataset_cache_dir:
+    value: /home/sanchitgandhi/cache
+  output_dir:
+    value: ./
+  per_device_train_batch_size:
+    value: 32
+  per_device_eval_batch_size:
+    value: 64
+  dtype:
+    value: bfloat16
+  learning_rate:
+    value: 1e-4
+  lr_scheduler_type:
+    value: constant_with_warmup
+  warmup_steps:
+    value: 50
+  max_steps:
+    value: 1000
+  eval_steps:
+    value: 1000
+  save_steps:
+    value: 1000
+  dataloader_num_workers:
+    value: 16
+  logging_steps:
+    value: 5
+  wer_threshold:
+    value: 10
+  activation_dropout:
+    values:
+      - 0
+      - 0.05
+      - 0.1
+  attention_dropout:
+    values:
+      - 0
+      - 0.05
+      - 0.1
+  dropout:
+    values:
+      - 0
+      - 0.05
+      - 0.1
+  freeze_encoder:
+    values:
+      - true
+      - false
+program: run_distillation.py
+project: distil-whisper-sweeps

@@ -1,0 +1,5 @@
+torch>=1.7
+transformers
+datasets[audio]
+jiwer
+evaluate>=0.3.0
