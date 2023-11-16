@@ -152,6 +152,7 @@ accelerate run_pseudo_labelling.py \
   --per_device_eval_batch_size 64 \
   --dtype "bfloat16" \
   --dataloader_num_workers 16 \
+  --preprocessing_num_workers 16 \
   --logging_steps 500 \
   --max_label_length 256 \
   --report_to "wandb" \
@@ -169,7 +170,7 @@ accelerate run_pseudo_labelling.py \
 On a 40GB A100 GPU, the following script takes TODO minutes. The WER of the pre-trained model is TODO% on the validation split. 
 
 There are a few noteworthy arguments that can be configured:
-1. `language`: explicitly setting the language token during inference substantially improves the generation performance of the Whisper model, since the model is forced always to predict in the given language. We recommend you set the language to the language you wish to distil the Whisper model on. 
+1. `language`: explicitly setting the language token during inference substantially improves the generation performance of the Whisper model, since the model is forced always to predict in the given language. We recommend you set the language to the language you wish to distil the Whisper model on. The only exception is when distilling an English-only model (i.e. where the model id is appended with an `.en`, e.g. `small.en`), the language argument should be set to None, since there is no language token used during training/inference.
 2. `return_timestamps`: whether or not to predict timestamps in the pseudo-labels. Timestamp prediction is required should you want your distilled model to be able to predict timestamps at inference time (e.g. for the original OpenAI long-form transcription algorithm). However, the pseudo-labels are marginally less accurate than not using timestamps. We recommend pseudo-labelling **with** timestamps to ensure the distilled model is as general as possible.
 3. `attn_type`: which attention implementation to use for inference. Set to `flash_attn` for [PyTorch SDPA](https://huggingface.co/docs/transformers/v4.35.2/en/perf_infer_gpu_one#bettertransformer), or `flash_attn_2` if your hardware supports Flash Attention 2 and you have the [package installed](https://github.com/Dao-AILab/flash-attention).
 4. `streaming`: whether or not to use Datasets' streaming mode. If enabled, the audio data will be streamed from the Hugging Face Hub with no disk space requirements. However, the user is then responsible for adding the pseudo-labels to the dataset script in a follow-up step (see [Using Streaming Mode](#TODO)). If set to `False`, the audio data will be downloaded and pre-processed offline. At the end of pseudo-labelling, the pseudo-labels will be automatically appended to the original dataset, meaning the dataset is ready to be used for the subsequent training step without any additional steps.
@@ -193,7 +194,7 @@ To achieve *robustness* to different distributions of audio data, it is recommen
 For example, the above three datasets all have splits for the German language. Thus, if distilling a Whisper model for German,
 it would be wise to use a combination of the three datasets during training, in order to cover at least three distinct domains
 (audiobooks, crowd-sourced speech, parliament recordings). You may wish to use a combination of open-source datasets, or 
-a combination of open-source and individually owned datasets.
+a combination of open-source and individually owned datasets to cover multiple distributions and domains.
 
 ## 2. Initialisation
 
@@ -278,4 +279,5 @@ There are a few noteworthy arguments that can be configured to give optimal trai
 * `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong.
 * `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
 * `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
+* `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model
 
