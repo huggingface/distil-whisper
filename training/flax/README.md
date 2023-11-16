@@ -14,9 +14,8 @@ Reproducing the Distil-Whisper project requires four stages to be completed in s
 This README is partitioned according to the four stages. Each section provides a minimal example for running the
 scripts used in the project. The final scripts used to train the model are referenced in-line.
 
-It is worth noting that the experiments performed to date have been on English ASR only. We will shortly publish a Colab 
-notebook that runs through these distillation steps sequentially and provides a multilingual example, facilitating anyone
-to run Whisper distillation on a language of their choice.
+It is worth noting that the experiments performed in JAX/Flax have been on English ASR only. For multilingual training code,
+the [PyTorch Training Code](../README.md) can easily be used, facilitating anyone to run Whisper distillation on a language of their choice.
 
 ## Requirements
 
