@@ -674,8 +674,6 @@ def main():
 
     # 8. Load Metric
     metric = evaluate.load("wer")
-    # convention is that we space all punctuation *except* apostrophes
-    all_punctuation = list(string.punctuation.replace("'", ""))
 
     def compute_metrics(preds, labels, file_ids):
         # replace padded labels by the padding token
@@ -685,19 +683,7 @@ def main():
         pred_str = tokenizer.batch_decode(preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps)
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-        # space punctuation for orthographic WER (c.f. ESB paper https://arxiv.org/abs/2210.13352)
-        spaced_pred_str = [
-            pred_str[i].replace(punctuation, f" {punctuation} ")
-            for punctuation in all_punctuation
-            for i in range(len(pred_str))
-        ]
-        spaced_label_str = [
-            label_str[i].replace(punctuation, f" {punctuation} ")
-            for punctuation in all_punctuation
-            for i in range(len(label_str))
-        ]
-        wer_ortho = 100 * metric.compute(predictions=spaced_pred_str, references=spaced_label_str)
+        wer_ortho = 100 * metric.compute(predictions=pred_str, references=label_str)
 
         # normalize everything and re-compute the WER
         norm_pred_str = [normalizer(pred) for pred in pred_str]
