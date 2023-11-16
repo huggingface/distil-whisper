@@ -169,7 +169,6 @@ accelerate launch run_pseudo_labelling.py \
   --language "hi" \
   --task "transcribe" \
   --return_timestamps \
-  --compile_encoder \
   --attn_type "flash_attn" \
   --streaming False \
   --generation_num_beams 1 \
@@ -177,7 +176,8 @@ accelerate launch run_pseudo_labelling.py \
   --push_to_hub
 ```
 
-On a 40GB A100 GPU, the following script takes TODO minutes. The WER of the pre-trained model is TODO% on the validation split. 
+On an 80 GB A100 GPU, the following script takes approximately 20 minutes to transcribe a total of 20 hours of audio data.
+The WER of the pre-trained model is 23.8% on the test split. 
 
 There are a few noteworthy arguments that can be configured:
 1. `language`: explicitly setting the language token during inference substantially improves the generation performance of the Whisper model, since the model is forced always to predict in the given language. We recommend you set the language to the language you wish to distil the Whisper model on. The only exception is when distilling an English-only model (i.e. where the model id is appended with an `.en`, e.g. `small.en`), the language argument should be set to None, since there is no language token used during training/inference.
@@ -247,11 +247,13 @@ checkpoint, with all 32 encoder layer and 2 decoder layers. The 2 student decode
 1 and 32 respectively, as the maximally spaced layers:
 
 ```bash
+#!/usr/bin/env bash
+
 python create_student_model.py \
   --teacher_checkpoint "openai/whisper-large-v2" \
   --encoder_layers 32 \
   --decoder_layers 2 \
-  --save_dir "./distil-large-v2-init" \
+  --save_dir "./distil-large-v2-init"
 ```
 
 The initialised model will be saved to the sub-directory `distil-large-v2-init` in our model repository. 
@@ -267,31 +269,39 @@ The following command takes the Common Voice dataset that was pseudo-labelled in
 2-layer decoder model intialised in the previous step. Note that multiple training datasets and splits can be loaded 
 by separating the dataset arguments by `+` symbols. Thus, the script generalises to any number of training datasets.
 
+In this example, we will combine the train and validation splits to give our training set, and evaluate on the test split 
+only. This is purely to demonstrate how to combine multiple pseudo-labelled datasets for training, rather than recommended 
+advice for defining train/validation splits. We advise that you train on the train splits of your dataset, evaluate and 
+tune hyper-parameters on the validation split, and only test the final checkpoint on the test split.
+
 ```bash
 #!/usr/bin/env bash
 
 accelerate launch run_distillation.py \
   --model_name_or_path "./distil-large-v2-init" \
   --teacher_model_name_or_path "openai/whisper-large-v2" \
-  --train_dataset_name "common_voice_13_0_hi_pseudo_labelled" \
-  --train_dataset_config_name "hi" \
-  --train_split_name "train" \
-  --train_dataset_samples "100" \
-  --eval_dataset_name "common_voice_13_0_hi_pseudo_labelled+google/fleurs" \
-  --eval_dataset_config_name "hi+hi_in" \
-  --eval_split_name "validation+validation" \
-  --eval_steps 5000 \
-  --save_steps 5000 \
-  --warmup_steps 500 \
+  --train_dataset_name "../common_voice_13_0_hi_pseudo_labelled+../common_voice_13_0_hi_pseudo_labelled" \
+  --train_dataset_config_name "hi+hi" \
+  --train_split_name "train+validation" \
+  --text_column_name "sentence+sentence" \
+  --train_dataset_samples "10+5" \
+  --eval_dataset_name "../common_voice_13_0_hi_pseudo_labelled" \
+  --eval_dataset_config_name "hi" \
+  --eval_split_name "test" \
+  --eval_text_column_name "sentence" \
+  --eval_steps 1000 \
+  --save_steps 1000 \
+  --warmup_steps 50 \
   --learning_rate 0.0001 \
   --lr_scheduler_type "constant_with_warmup" \
   --logging_steps 25 \
   --save_total_limit 1 \
-  --max_steps 20000 \
+  --max_steps 5000 \
   --wer_threshold 10 \
   --per_device_train_batch_size 64 \
   --per_device_eval_batch_size 64 \
   --dataloader_num_workers 16 \
+  --preprocessing_num_workers 16 \
   --dtype "bfloat16" \
   --output_dir "./" \
   --do_train \
@@ -300,13 +310,12 @@ accelerate launch run_distillation.py \
   --overwrite_output_dir \
   --predict_with_generate \
   --freeze_encoder \
-  --streaming \
-  --use_auth_token \
+  --streaming False \
   --push_to_hub
 
 ```
 
-The above training script will take approximately TODO hours to complete on a 40GB A100 GPU and yield a final WER of TODO%.
+The above training script will take approximately TODO hours to complete on an 80 GB A100 GPU and yield a final WER of TODO%.
 
 Training logs will be reported to TensorBoard and WandB, provided the relevant packages are available. An example of a 
 saved checkpoint pushed to the Hugging Face Hub can be found here: [TODO](TODO).

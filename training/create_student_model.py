@@ -136,14 +136,14 @@ def init_student_model_from_teacher(
             f"Missing key(s) in state_dict: {missing_keys}"
         )
     if decoder_layers == teacher_decoder_layers:
-        decoder_keys = [key for key in unexpected_keys if "decoder" in key]
+        decoder_keys = [key for key in unexpected_keys if "model.decoder.layers" in key]
         if len(decoder_keys) > 0:
             raise RuntimeError(
                 "Error(s) in loading state_dict for WhisperForConditionalGeneration. \n"
                 f"Unexpected key(s) in state_dict: {decoder_keys}"
             )
     if encoder_layers == teacher_encoder_layers:
-        encoder_keys = [key for key in unexpected_keys if "encoder" in key]
+        encoder_keys = [key for key in unexpected_keys if "model.encoder.layers" in key]
         if len(encoder_keys) > 0:
             raise RuntimeError(
                 "Error(s) in loading state_dict for WhisperForConditionalGeneration. \n"

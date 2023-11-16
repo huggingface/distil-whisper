@@ -53,7 +53,7 @@ from transformers import (
     WhisperProcessor,
     WhisperTokenizerFast,
 )
-from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
+from transformers.models.whisper.english_normalizer import EnglishTextNormalizer, BasicTextNormalizer
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -137,12 +137,6 @@ class ModelArguments:
                 "2. `flash_attn`: Flash Attention through PyTorch SDPA. Requires `torch>=2.0` and `optimum` to be installed. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)"
                 "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)"
             )
-        },
-    )
-    compile_encoder: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to enable torch compile in the encoder module. Requires `torch>=2.0` to be installed."
         },
     )
 
@@ -277,8 +271,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             The processor used for proccessing the data.
         decoder_start_token_id (:obj: `int`)
             The start-of-sequence token id of the decoder.
-        decoder_prev_token_id (:obj: `int`)
-            The start-of-prompt token id of the decoder
         input_padding (:obj:`bool`, :obj:`str` or :class:`~transformers.tokenization_utils_base.PaddingStrategy`, `optional`, defaults to :obj:`True`):
             Select a strategy to pad the returned input sequences (according to the model's padding side and padding index)
             among:
@@ -297,7 +289,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
     processor: Any
     decoder_start_token_id: int
-    decoder_prev_token_id: int
     input_padding: Union[bool, str] = "max_length"
     target_padding: Union[bool, str] = "max_length"
     max_target_length: Optional[int] = None
@@ -338,13 +329,8 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
         # if bos token is appended in previous tokenization step,
         # cut bos token here as it's append later anyways
-        if set(torch.unique(labels[:, 0])).issubset({self.decoder_start_token_id, self.decoder_prev_token_id}):
+        if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
             labels = labels[:, 1:]
-
-        # replace initial prompt tokens with -100 to ignore correctly when computing the loss
-        bos_index = torch.argmax((labels == self.decoder_start_token_id).long(), dim=1)
-        prompt_mask = torch.arange(labels.shape[1]) < bos_index[:, None]
-        labels = torch.where(prompt_mask, -100, labels)
 
         batch["labels"] = labels
         batch["file_ids"] = file_ids_batch["input_ids"]
@@ -552,11 +538,6 @@ def main():
             "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
         )
 
-    if model_args.compile_encoder:
-        model.model.encoder.forward = torch.compile(
-            model.model.encoder.forward, mode="reduce-overhead", fullgraph=True
-        )
-
     model.eval()
 
     if model.config.decoder_start_token_id is None:
@@ -592,7 +573,9 @@ def main():
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     id_column_name = data_args.id_column_name
-    normalizer = EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+    normalizer = (
+        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+    )
 
     if data_args.max_samples_per_split is not None:
         for split in data_splits:
@@ -706,7 +689,6 @@ def main():
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,  # <|startoftranscript|>
-        decoder_prev_token_id=tokenizer.all_special_ids[-3],  # <|startofprev|>
         input_padding="longest",
         target_padding="max_length",
         max_target_length=max_label_length,

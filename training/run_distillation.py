@@ -500,10 +500,6 @@ def convert_dataset_str_to_list(
     """
     if isinstance(dataset_names, str):
         dataset_names = dataset_names.split("+")
-        # we assume that all the datasets we're using derive from the distil-whisper org on the Hub - prepend the org name if necessary
-        for i in range(len(dataset_names)):
-            ds_name = dataset_names[i]
-            dataset_names[i] = f"distil-whisper/{ds_name}" if "/" not in ds_name else ds_name
         dataset_config_names = dataset_config_names.split("+")
         splits = splits.split("+") if splits is not None else None
         text_column_names = text_column_names.split("+") if text_column_names is not None else None
@@ -819,6 +815,7 @@ def main():
             data_args.train_dataset_name,
             data_args.train_dataset_config_name,
             splits=data_args.train_split_name,
+            text_column_names=data_args.text_column_name,
             streaming=data_args.streaming,
             dataset_samples=data_args.train_dataset_samples,
             seed=training_args.seed,
@@ -850,6 +847,8 @@ def main():
                 token=model_args.token,
                 streaming=data_args.streaming,
             )
+            if data_args.eval_text_column_name != "text":
+                raw_datasets["eval"] = raw_datasets["eval"].rename_column(data_args.eval_text_column_name, "text")
         else:
             # load multiple eval sets
             for dataset_dict in dataset_names_dict:
@@ -867,9 +866,8 @@ def main():
                     token=model_args.token,
                     streaming=data_args.streaming,
                 )
-                features = raw_datasets[pretty_name].features.keys()
                 # make column names consistent (text, audio)
-                if "text" not in features:
+                if dataset_dict["text_column_name"] != "text":
                     raw_datasets[pretty_name] = raw_datasets[pretty_name].rename_column(
                         dataset_dict["text_column_name"], "text"
                     )
@@ -933,13 +931,6 @@ def main():
         )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
-    output_hidden_states = not share_hidden_states and training_args.mse_weight > 0
-    encoder_layer_mapping = get_layers_to_supervise(
-        student_model.config.encoder_layers, teacher_model.config.encoder_layers
-    )
-    decoder_layer_mapping = get_layers_to_supervise(
-        student_model.config.decoder_layers, teacher_model.config.decoder_layers
-    )
 
     # enable gradient checkpointing if necessary
     if training_args.gradient_checkpointing:
@@ -997,19 +988,25 @@ def main():
     max_label_length = (
         data_args.max_label_length if data_args.max_label_length is not None else student_model.config.max_length
     )
+
     timestamp_probability = data_args.timestamp_probability
     condition_on_prev_probability = data_args.condition_on_prev_probability
     return_timestamps = data_args.return_timestamps if timestamp_probability > 0 else False
+
     timestamp_ids = tokenizer.timestamp_ids()
     timestamp_begin = tokenizer.all_special_ids[-1]
     timestamp_position = 3 if is_multilingual else 1
+
     decoder_start_token_id = student_model.config.decoder_start_token_id  # <|startoftranscript|>
     decoder_prev_token_id = tokenizer.all_special_ids[-3]  # <|startofprev|>
     decoder_eot_token_id = tokenizer.eos_token_id
+
     language = data_args.language
     task = data_args.task
+
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
+
     metric = evaluate.load("wer")
     normalizer = (
         BasicTextNormalizer() if language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
@@ -1170,7 +1167,7 @@ def main():
             function=prepare_train_dataset,
             remove_columns=raw_datasets_train_features,
             batched=True,
-            batch_size=max(training_args.per_device_train_batch_size, 2),  # TODO(SG) make data prep bs configurable
+            batch_size=max(training_args.per_device_train_batch_size, 4),  # TODO(SG) make data prep bs configurable
         )
         if accelerator.is_main_process:
             vectorized_datasets["train"] = (
@@ -1373,7 +1370,7 @@ def main():
         student_model.train()
         teacher_model.eval()
 
-        student_outputs = student_model(**batch, output_hidden_states=output_hidden_states)
+        student_outputs = student_model(**batch)
         with torch.no_grad():
             if share_hidden_states:
                 # if the student and teacher share the same frozen encoder then we don't have to recompute the
@@ -1382,7 +1379,7 @@ def main():
                 teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
                 # do the full forward pass for the teacher model (encoder + decoder)
-                teacher_outputs = teacher_model(**batch, output_hidden_states=output_hidden_states)
+                teacher_outputs = teacher_model(**batch)
 
         # CE (data) loss
         ce_loss = student_outputs.loss
@@ -1404,15 +1401,12 @@ def main():
         teacher_model.eval()
 
         with torch.no_grad():
-            student_outputs = student_model(
-                **batch,
-                output_hidden_states=output_hidden_states,
-            )
+            student_outputs = student_model(**batch)
             if share_hidden_states:
                 encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state)
                 teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
-                teacher_outputs = teacher_model(**batch, output_hidden_states=output_hidden_states)
+                teacher_outputs = teacher_model(**batch)
 
         # CE (data) loss
         ce_loss = student_outputs.loss

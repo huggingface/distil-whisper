@@ -53,7 +53,7 @@ from transformers import (
     WhisperProcessor,
     WhisperTokenizerFast,
 )
-from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
+from transformers.models.whisper.english_normalizer import EnglishTextNormalizer, BasicTextNormalizer
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -139,12 +139,6 @@ class ModelArguments:
             )
         },
     )
-    compile_encoder: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to enable torch compile in the encoder module. Requires `torch>=2.0` to be installed."
-        },
-    )
 
 
 @dataclass
@@ -181,12 +175,8 @@ class DataTrainingArguments:
         default="text",
         metadata={"help": "The name of the dataset column containing the text data. Defaults to 'text'."},
     )
-    id_column_name: str = field(
-        default="id",
-        metadata={"help": "The name of the dataset column containing the id data. Defaults to 'id'"},
-    )
     max_label_length: int = field(
-        default=128,
+        default=256,
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
     )
     preprocessing_only: bool = field(
@@ -277,8 +267,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             The processor used for proccessing the data.
         decoder_start_token_id (:obj: `int`)
             The start-of-sequence token id of the decoder.
-        decoder_prev_token_id (:obj: `int`)
-            The start-of-prompt token id of the decoder
         input_padding (:obj:`bool`, :obj:`str` or :class:`~transformers.tokenization_utils_base.PaddingStrategy`, `optional`, defaults to :obj:`True`):
             Select a strategy to pad the returned input sequences (according to the model's padding side and padding index)
             among:
@@ -297,7 +285,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
     processor: Any
     decoder_start_token_id: int
-    decoder_prev_token_id: int
     input_padding: Union[bool, str] = "max_length"
     target_padding: Union[bool, str] = "max_length"
     max_target_length: Optional[int] = None
@@ -310,7 +297,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         # dataloader returns a list of features which we convert to a dict
         input_features = {model_input_name: [feature[model_input_name] for feature in features]}
         label_features = {"input_ids": [feature["labels"] for feature in features]}
-        file_ids = {"input_ids": [feature["file_id"] for feature in features]}
 
         # reformat list to dict and set to pytorch format
         batch = self.processor.feature_extractor.pad(
@@ -326,28 +312,16 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             return_tensors="pt",
         )
 
-        file_ids_batch = self.processor.tokenizer.pad(
-            file_ids,
-            max_length=self.max_target_length,
-            padding=self.target_padding,
-            return_tensors="pt",
-        )
 
         # replace padding with -100 to ignore correctly when computing the loss
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
 
         # if bos token is appended in previous tokenization step,
         # cut bos token here as it's append later anyways
-        if set(torch.unique(labels[:, 0])).issubset({self.decoder_start_token_id, self.decoder_prev_token_id}):
+        if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
             labels = labels[:, 1:]
 
-        # replace initial prompt tokens with -100 to ignore correctly when computing the loss
-        bos_index = torch.argmax((labels == self.decoder_start_token_id).long(), dim=1)
-        prompt_mask = torch.arange(labels.shape[1]) < bos_index[:, None]
-        labels = torch.where(prompt_mask, -100, labels)
-
         batch["labels"] = labels
-        batch["file_ids"] = file_ids_batch["input_ids"]
 
         return batch
 
@@ -552,11 +526,6 @@ def main():
             "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
         )
 
-    if model_args.compile_encoder:
-        model.model.encoder.forward = torch.compile(
-            model.model.encoder.forward, mode="reduce-overhead", fullgraph=True
-        )
-
     model.eval()
 
     if model.config.decoder_start_token_id is None:
@@ -591,8 +560,9 @@ def main():
     dataloader_num_workers = training_args.dataloader_num_workers
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
-    id_column_name = data_args.id_column_name
-    normalizer = EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+    normalizer = (
+        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+    )
 
     if data_args.max_samples_per_split is not None:
         for split in data_splits:
@@ -612,9 +582,6 @@ def main():
         # process targets
         input_str = batch[text_column_name]
         batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
-
-        # record the id of the sample as token ids
-        batch["file_id"] = tokenizer(batch[id_column_name], add_special_tokens=False).input_ids
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
@@ -638,44 +605,10 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
-    if data_args.streaming and dataloader_num_workers > 0:
-        logger.warning(
-            "Using multiple dataloader num workers with streaming mode will result in different shards of "
-            "data being transcribed in parallel. This is not advised if you want to preserve the order of the "
-            "audio-text data."
-        )
-
-    # Handle the repository creation
-    output_dir = training_args.output_dir
-    if training_args.push_to_hub:
-        if training_args.hub_model_id is None:
-            repo_name = get_full_repo_name(
-                Path(output_dir).absolute().name,
-                token=token,
-            )
-        else:
-            repo_name = training_args.hub_model_id
-        create_repo(repo_name, exist_ok=True, token=token, repo_type="dataset", private=data_args.private_dataset)
-        repo = Repository(
-            output_dir,
-            clone_from=repo_name,
-            token=token,
-            repo_type="dataset",
-        )
-        # Ensure large txt files can be pushed to the Hub with git-lfs
-        with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
-            git_lfs_extensions = f.read()
-            if "*.csv" not in git_lfs_extensions:
-                f.write("*.csv filter=lfs diff=lfs merge=lfs -text")
-    else:
-        # this is where we'll save our transcriptions
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
     # 8. Load Metric
     metric = evaluate.load("wer")
 
-    def compute_metrics(preds, labels, file_ids):
+    def compute_metrics(preds, labels):
         # replace padded labels by the padding token
         for idx in range(len(labels)):
             labels[idx][labels[idx] == -100] = tokenizer.pad_token_id
@@ -691,14 +624,13 @@ def main():
         # for logging, we need the pred/labels to match the norm_pred/norm_labels, so discard any filtered samples here
         pred_str = [pred_str[i] for i in range(len(norm_pred_str)) if len(norm_label_str[i]) > 0]
         label_str = [label_str[i] for i in range(len(norm_label_str)) if len(norm_label_str[i]) > 0]
-        file_ids = [file_ids[i] for i in range(len(file_ids)) if len(norm_label_str[i]) > 0]
         # filtering step to only evaluate the samples that correspond to non-zero normalized references:
         norm_pred_str = [norm_pred_str[i] for i in range(len(norm_pred_str)) if len(norm_label_str[i]) > 0]
         norm_label_str = [norm_label_str[i] for i in range(len(norm_label_str)) if len(norm_label_str[i]) > 0]
 
         wer = 100 * metric.compute(predictions=norm_pred_str, references=norm_label_str)
 
-        return {"wer": wer, "wer_ortho": wer_ortho}, pred_str, label_str, norm_pred_str, norm_label_str, file_ids
+        return {"wer": wer, "wer_ortho": wer_ortho}, pred_str, label_str, norm_pred_str, norm_label_str
 
     # 12. Define Training Schedule
     per_device_eval_batch_size = int(training_args.per_device_eval_batch_size)
@@ -706,7 +638,6 @@ def main():
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,  # <|startoftranscript|>
-        decoder_prev_token_id=tokenizer.all_special_ids[-3],  # <|startofprev|>
         input_padding="longest",
         target_padding="max_length",
         max_target_length=max_label_length,
@@ -719,9 +650,10 @@ def main():
         if training_args.generation_num_beams is not None
         else getattr(model.generation_config, "num_beams", 1)
     )
+    max_new_tokens = training_args.generation_max_length if training_args.generation_max_length is not None else max_label_length
 
     gen_kwargs = {
-        "max_length": max_label_length,
+        "max_new_tokens": max_new_tokens,
         "num_beams": num_beams,
         "return_timestamps": return_timestamps,
     }
@@ -737,11 +669,10 @@ def main():
     # 15. Prepare everything with accelerate
     model = accelerator.prepare(model)
 
-    def eval_step_with_save(split="eval"):
+    def eval_step(split="eval"):
         # ======================== Evaluating ==============================
         eval_preds = []
         eval_labels = []
-        eval_ids = []
         eval_start = time.time()
 
         eval_loader = DataLoader(
@@ -757,109 +688,49 @@ def main():
 
         # make the split name pretty for librispeech etc
         split = split.replace(".", "-").split("/")[-1]
-        output_csv = os.path.join(output_dir, f"{split}-transcription.csv")
 
         for step, batch in enumerate(batches):
-            file_ids = batch.pop("file_ids")
             # Generate predictions and pad to max generated length
             generate_fn = model.module.generate if accelerator.num_processes > 1 else model.generate
             generated_ids = generate_fn(batch["input_features"].to(dtype=torch_dtype), **gen_kwargs)
             generated_ids = accelerator.pad_across_processes(generated_ids, dim=1, pad_index=tokenizer.pad_token_id)
             # Gather all predictions and targets
-            file_ids, generated_ids, labels = accelerator.gather_for_metrics(
-                (file_ids, generated_ids, batch["labels"])
-            )
+            generated_ids, labels = accelerator.gather_for_metrics((generated_ids, batch["labels"]))
             eval_preds.extend(generated_ids.cpu().numpy())
             eval_labels.extend(labels.cpu().numpy())
-            file_ids = tokenizer.batch_decode(file_ids, skip_special_tokens=True)
-            eval_ids.extend(file_ids)
-
-            if step % training_args.logging_steps == 0 and step > 0:
-                batches.write(f"Saving transcriptions for split {split} step {step}")
-                accelerator.wait_for_everyone()
-                if data_args.decode_token_ids:
-                    eval_preds = tokenizer.batch_decode(
-                        eval_preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps
-                    )
-                csv_data = [[eval_ids[i], eval_preds[i]] for i in range(len(eval_preds))]
-
-                with open(output_csv, "w", encoding="UTF8", newline="") as f:
-                    writer = csv.writer(f)
-                    # write multiple rows
-                    writer.writerow(["file_id", "whisper_transcript"])
-                    writer.writerows(csv_data)
-
-                if training_args.push_to_hub and accelerator.is_main_process:
-                    repo.push_to_hub(
-                        commit_message=f"Saving transcriptions for split {split} step {step}.",
-                        blocking=False,
-                    )
 
         accelerator.wait_for_everyone()
         eval_time = time.time() - eval_start
 
         # compute WER metric for eval sets
-        wer_desc = ""
-        if "validation" in split or "test" in split:
-            wer_metric, pred_str, label_str, norm_pred_str, norm_label_str, eval_ids = compute_metrics(
-                eval_preds, eval_labels, eval_ids
-            )
-            wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
-            # Save metrics + predictions
-            log_metric(
-                accelerator,
-                metrics=wer_metric,
-                train_time=eval_time,
-                prefix=split,
-            )
-            log_pred(
-                accelerator,
-                pred_str,
-                label_str,
-                norm_pred_str,
-                norm_label_str,
-                prefix=split,
-            )
-            if data_args.decode_token_ids:
-                eval_preds = pred_str
-        elif data_args.decode_token_ids:
-            eval_preds = tokenizer.batch_decode(
-                eval_preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps
-            )
-
-        batches.write(f"Saving final transcriptions for split {split}.")
-        csv_data = [[eval_ids[i], eval_preds[i]] for i in range(len(eval_preds))]
-        with open(output_csv, "w", encoding="UTF8", newline="") as f:
-            writer = csv.writer(f)
-            # write multiple rows
-            writer.writerow(["file_id", "whisper_transcript"])
-            writer.writerows(csv_data)
-
-        # Print metrics
+        wer_metric, pred_str, label_str, norm_pred_str, norm_label_str = compute_metrics(eval_preds, eval_labels)
+        wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
         logger.info(wer_desc)
+        # Save metrics + predictions
+        log_metric(
+            accelerator,
+            metrics=wer_metric,
+            train_time=eval_time,
+            prefix=split,
+        )
+        log_pred(
+            accelerator,
+            pred_str,
+            label_str,
+            norm_pred_str,
+            norm_label_str,
+            prefix=split,
+        )
 
-        if not data_args.streaming:
-            raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", eval_preds)
-
-    logger.info("***** Running Labelling *****")
+    logger.info("***** Running Evaluation *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
     logger.info(
         f"  Total eval batch size (w. parallel & distributed) = {training_args.per_device_eval_batch_size * accelerator.num_processes}"
     )
     logger.info(f"  Predict labels with timestamps = {return_timestamps}")
-    logger.info(f"  Decode labels to transcriptions = {data_args.decode_token_ids}")
     for split in data_splits:
-        eval_step_with_save(split=split)
+        eval_step(split=split)
         accelerator.wait_for_everyone()
-        if training_args.push_to_hub and accelerator.is_main_process:
-            repo.push_to_hub(
-                commit_message=f"Saving final transcriptions for split {split.replace('.', '-').split('/')[-1]}",
-                blocking=False,
-            )
-    if not data_args.streaming and accelerator.is_main_process:
-        raw_datasets.save_to_disk(output_dir, num_proc=num_workers)
-        if training_args.push_to_hub:
-            raw_datasets.push_to_hub(repo_name, config_name=data_args.dataset_config_name)
     accelerator.end_training()
 
 
