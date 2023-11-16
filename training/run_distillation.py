@@ -276,10 +276,10 @@ class DataTrainingArguments:
         },
     )
     timestamp_probability: float = field(
-        default=0.5, metadata={"help": "Probability for training on timestamped tokens if the data contains it."}
+        default=0.2, metadata={"help": "Probability for training on timestamped tokens if the data contains it."}
     )
     condition_on_prev_probability: float = field(
-        default=0.1, metadata={"help": "Probability for conditioning on the previous text example."}
+        default=0.2, metadata={"help": "Probability for conditioning on the previous text example."}
     )
     return_timestamps: bool = field(
         default=False, metadata={"help": "Whether or not to predict timestamps in the generation step."}

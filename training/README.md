@@ -266,13 +266,17 @@ accelerate launch run_distillation.py \
 
 ```
 
-The above training script will take approximately TODO hours to complete on an 80 GB A100 GPU and yield a final WER of TODO%.
+The above training script will take approximately 1 hour to complete on an 80 GB A100 GPU and yield a final WER of 43%.
+This is reasonable for 1000 training steps and just 20 hours of un-filtered data, but over twice the error rate of the 
+pre-trained model. As mentioned above, using closer to 1000 hours of data and training for 10k steps will likely yield
+more competitive performance.
+
 Scaling to multiple GPUs using [distributed data parallelism (DDP)](https://pytorch.org/tutorials/beginner/ddp_series_theory.html)
 is trivial: simply run `accelerate config` and select the multi-GPU option, specifying the IDs of the GPUs you wish to use. The 
 above script can then be run using DDP with no code changes. 
 
 Training logs will be reported to TensorBoard and WandB, provided the relevant packages are available. An example of a 
-saved checkpoint pushed to the Hugging Face Hub can be found here: [TODO](TODO).
+saved checkpoint pushed to the Hugging Face Hub can be found here: [sanchit-gandhi/distil-whisper-large-v2-hi](https://huggingface.co/sanchit-gandhi/distil-whisper-large-v2-hi).
 
 There are a few noteworthy arguments that can be configured to give optimal training performance:
 1. `train_dataset_samples`: defines the number of training samples in each dataset. Used to calculate the sampling probabilities in the dataloader. A good starting point is setting the samples to the number of hours of audio data in each split. A more refined strategy is setting it to the number of training samples in each split, however this might require downloading the dataset offline to compute these statistics.
