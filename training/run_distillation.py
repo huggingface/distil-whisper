@@ -796,10 +796,8 @@ def main():
             repo = Repository(training_args.output_dir, clone_from=repo_id, token=training_args.hub_token)
 
             with open(os.path.join(training_args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
+                if "wandb" not in gitignore:
+                    gitignore.write("wandb\n")
         elif training_args.output_dir is not None:
             os.makedirs(training_args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()

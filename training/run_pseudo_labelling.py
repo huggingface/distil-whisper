@@ -196,7 +196,7 @@ class DataTrainingArguments:
             )
         },
     )
-    data_split_name: str = field(
+    dataset_split_name: str = field(
         default="train+validation+test",
         metadata={
             "help": (
@@ -452,7 +452,7 @@ def main():
     raw_datasets = IterableDatasetDict() if data_args.streaming else DatasetDict()
     token = model_args.token if model_args.token is not None else HfFolder().get_token()
 
-    data_splits = data_args.data_split_name.split("+")
+    data_splits = data_args.dataset_split_name.split("+")
     for split in data_splits:
         if data_args.streaming:
             raw_datasets[split] = load_dataset(

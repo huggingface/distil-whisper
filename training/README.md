@@ -154,7 +154,7 @@ accelerate launch run_pseudo_labelling.py \
   --model_name_or_path "openai/whisper-large-v2" \
   --dataset_name "mozilla-foundation/common_voice_13_0" \
   --dataset_config_name "hi" \
-  --data_split_name "train+validation+test" \
+  --dataset_split_name "train+validation+test" \
   --text_column_name "sentence" \
   --id_column_name "path" \
   --output_dir "./common_voice_13_0_hi_pseudo_labelled" \
@@ -321,9 +321,85 @@ Training logs will be reported to TensorBoard and WandB, provided the relevant p
 saved checkpoint pushed to the Hugging Face Hub can be found here: [TODO](TODO).
 
 There are a few noteworthy arguments that can be configured to give optimal training performance:
-* `train_dataset_samples`: defines the number of training samples in each dataset. Used to calculate the sampling probabilities in the dataloader. A good starting point is setting the samples to the number of hours of audio data in each split. A more refined strategy is setting it to the number of training samples in each split, however this might require downloading the dataset offline to compute these statistics.
-* `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong.
-* `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
-* `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
-* `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model
+1. `train_dataset_samples`: defines the number of training samples in each dataset. Used to calculate the sampling probabilities in the dataloader. A good starting point is setting the samples to the number of hours of audio data in each split. A more refined strategy is setting it to the number of training samples in each split, however this might require downloading the dataset offline to compute these statistics.
+2. `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong.
+3. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
+4. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
+5. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model
+6. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
 
+## Evaluation
+
+There are two types of evaluation performed in Distil-Whisper:
+1. Short form: evaluation on audio samples less than 30s in duration. Examples include typical ASR test sets, such as the LibriSpeech validation set.
+2. Long form: evaluation on audio samples longer than 30s in duration. Examples include entire TED talks or earnings calls.
+
+Both forms of evaluation are performed using the *word-error rate (WER)* metric.
+
+### Short Form
+
+The script [`run_short_form_eval.py`](run_short_form_eval.py) can be used to evaluate a trained student model over 
+multiple validation sets. The following example demonstrates how to evaluate the student model trained in the previous 
+step on the Common Voice `test` set and also the FLEURS `test` set. Again, it leverages streaming mode to 
+bypass the need to download the data offline:
+
+```bash
+#!/usr/bin/env bash
+
+accelerate launch run_short_form_eval.py \
+  --model_name_or_path "./" \
+  --dataset_name "../common_voice_13_0_hi_pseudo_labelled+google/fleurs" \
+  --dataset_config_name "hi+hi_in" \
+  --dataset_split_name "test+test" \
+  --text_column_name "sentence+transcription" \
+  --output_dir "./" \
+  --per_device_eval_batch_size 64 \
+  --dtype "bfloat16" \
+  --dataloader_num_workers 16 \
+  --report_to "wandb" \
+  --generation_max_length 128 \
+  --attn_type "flash_attn" \
+  --streaming
+```
+
+It is particularly important to evaluate the final model on data that is *out-of-distribution (OOD)* with the data used
+to distill the model. Evaluating on OOD data provides insight as to how well the distilled model is likely to generalise
+to different audio distributions at inference time. In this example, Common Voice is *in-distribution (ID)*, since it is 
+taken from the same distribution as the Common Voice training set, whereas FLEURS is OOD.
+
+### Long Form
+
+Long form evaluation runs on the premise that a single long audio file can be *chunked* into smaller segments and 
+inferred in parallel. The resulting transcriptions are then joined at the boundaries to give the final text prediction. 
+A small overlap (or *stride*) is used between adjacent segments to ensure a continuous transcription across chunks.
+
+This style of chunked inference is performed using the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines)
+class, which is heavily inspired from [Whisper JAX](https://github.com/sanchit-gandhi/whisper-jax/tree/main#pipeline-usage).
+
+The script [`run_long_form_transcription.py`](run_long_form_transcription.py) can be used to evaluate the trained 
+student model on an arbitrary number of long-form evaluation sets. The following script demonstrates how to evaluate
+the example student model on two such test sets, [Earnings 21](https://huggingface.co/datasets/distil-whisper/earnings21) 
+and [Earnings 22](https://huggingface.co/datasets/distil-whisper/earnings22):
+
+```bash
+#!/usr/bin/env bash
+
+python run_long_form_transcription.py \
+  --model_name_or_path "./large-32-2" \
+  --dataset_name "distil-whisper/earnings21+distil-whisper/earnings22" \
+  --dataset_config_name "default+default" \
+  --dataset_split_name "test+test+test+test" \
+  --text_column_name "transcription+transcription" \
+  --output_dir "./large-32-2" \
+  --per_device_eval_batch_size 64 \
+  --chunk_length_s 15 \
+  --dtype "bfloat16" \
+  --report_to "wandb" \
+  --streaming
+
+```
+
+The argument `chunk_length_s` controls the length of the chunked audio samples. It should be set to match the typical
+length of audio the student model was trained on. If unsure about what value of `chunk_length_s` is optimal for your case,
+it is recommended to run a *sweep* over all possible values. A template script for running a [WandB sweep](https://docs.wandb.ai/guides/sweeps) 
+can be found under [`run_chunk_length_s_sweep.yaml`](long_form_transcription_scripts/run_chunk_length_s_sweep.yaml).

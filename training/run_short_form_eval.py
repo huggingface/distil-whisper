@@ -14,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Pseudo-labelling audio data using the Whisper model in preparation for distillation.
+Evaluating a Whisper model on one or more short-form evaluation datasets.
 """
 import csv
 
-# You can also adapt this script for your own pseudo-labelling tasks. Pointers for this are left as comments.
+# You can also adapt this script for your own evaluation tasks. Pointers for this are left as comments.
 import logging
 import os
 import string
@@ -192,14 +192,14 @@ class DataTrainingArguments:
             )
         },
     )
-    data_split_name: str = field(
+    dataset_split_name: str = field(
         default="train+validation+test",
         metadata={
             "help": (
                 "The name of the data set splits to use (via the datasets library)."
                 " Defaults to 'train+validation+test'. Multiple splits can be passed by splitting a"
                 " list through the '+' character, e.g. 'train+validation' will"
-                " pseudo-label both the 'train' and 'validation' splits sequentially."
+                " evaluate both the 'train' and 'validation' splits sequentially."
             )
         },
     )
@@ -236,14 +236,6 @@ class DataTrainingArguments:
             "help": "Task, either `transcribe` for speech recognition or `translate` for speech translation."
             "This argument should be set for multilingual distillation only. For English speech recognition, it should be left as `None`."
         },
-    )
-    decode_token_ids: bool = field(
-        default=True,
-        metadata={"help": "Whether or not to decode the predicted token ids to text transcriptions."},
-    )
-    private_dataset: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to create a private dataset for the pseudo-labelled data."},
     )
 
 
@@ -374,6 +366,71 @@ def log_pred(
             data=str_data_incorrect[:num_lines],
         )
 
+def convert_dataset_str_to_list(
+    dataset_names,
+    dataset_config_names,
+    splits=None,
+    text_column_names=None,
+    dataset_samples=None,
+    default_split="train",
+) -> List[Dict]:
+    """
+    Given three lists of dataset names, configs and splits, this function groups the corresponding
+    names/configs/splits. Each dataset is assigned a unique dictionary with these metadata values, and the
+    function returns a list of dictionaries, one for each dataset.
+    """
+    if isinstance(dataset_names, str):
+        dataset_names = dataset_names.split("+")
+        dataset_config_names = dataset_config_names.split("+")
+        splits = splits.split("+") if splits is not None else None
+        text_column_names = text_column_names.split("+") if text_column_names is not None else None
+        dataset_samples = dataset_samples.split("+") if dataset_samples is not None else None
+
+    # basic checks to ensure we've got the right number of datasets/configs/splits/columns/probs
+    if len(dataset_names) != len(dataset_config_names):
+        raise ValueError(
+            f"Ensure one config is passed for each dataset, got {len(dataset_names)} datasets and"
+            f" {len(dataset_config_names)} configs."
+        )
+
+    if splits is not None and len(splits) != len(dataset_names):
+        raise ValueError(
+            f"Ensure one split is passed for each dataset, got {len(dataset_names)} datasets and {len(splits)} splits."
+        )
+
+    if text_column_names is not None and len(text_column_names) != len(dataset_names):
+        raise ValueError(
+            f"Ensure one text column name is passed for each dataset, got {len(dataset_names)} datasets and"
+            f" {len(text_column_names)} text column names."
+        )
+
+    if dataset_samples is not None:
+        if len(dataset_samples) != len(dataset_names):
+            raise ValueError(
+                f"Ensure one sample is passed for each dataset, got {len(dataset_names)} datasets and "
+                f"{len(dataset_samples)} samples."
+            )
+        dataset_samples = [float(ds_sample) for ds_sample in dataset_samples]
+    else:
+        dataset_samples = [None] * len(dataset_names)
+
+    text_column_names = (
+        text_column_names if text_column_names is not None else ["text" for _ in range(len(dataset_names))]
+    )
+    splits = splits if splits is not None else [default_split for _ in range(len(dataset_names))]
+
+    dataset_names_dict = []
+    for i, ds_name in enumerate(dataset_names):
+        dataset_names_dict.append(
+            {
+                "name": ds_name,
+                "config": dataset_config_names[i],
+                "split": splits[i],
+                "text_column_name": text_column_names[i],
+                "samples": dataset_samples[i],
+            }
+        )
+    return dataset_names_dict
 
 def main():
     # 1. Parse input arguments
@@ -440,43 +497,52 @@ def main():
     raw_datasets = IterableDatasetDict() if data_args.streaming else DatasetDict()
     token = model_args.token if model_args.token is not None else HfFolder().get_token()
 
-    data_splits = data_args.data_split_name.split("+")
-    for split in data_splits:
-        if data_args.streaming:
-            raw_datasets[split] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=split,
-                cache_dir=data_args.dataset_cache_dir,
-                token=token,
-                streaming=True,
-            )
-        else:
-            raw_datasets[split] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=split,
-                cache_dir=data_args.dataset_cache_dir,
-                token=token,
-                streaming=False,
-                num_proc=data_args.preprocessing_num_workers,
-            )
-
-    if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--audio_column_name '{data_args.audio_column_name}' not found in dataset"
-            f" '{data_args.dataset_name}'. Make sure to set `--audio_column_name` to"
-            " the correct audio column - one of"
-            f" {', '.join(next(iter(raw_datasets.values())).column_names)}."
+    dataset_names_dict = convert_dataset_str_to_list(
+        data_args.dataset_name,
+        data_args.dataset_config_name,
+        splits=data_args.dataset_split_name,
+        text_column_names=data_args.text_column_name,
+    )
+    all_eval_splits = []
+    if len(dataset_names_dict) == 1:
+        # load a single eval set
+        dataset_dict = dataset_names_dict[0]
+        all_eval_splits.append("eval")
+        raw_datasets["eval"] = load_dataset(
+            dataset_dict["name"],
+            dataset_dict["config"],
+            split=dataset_dict["split"],
+            cache_dir=data_args.dataset_cache_dir,
+            token=model_args.token,
+            streaming=data_args.streaming,
         )
-
-    if data_args.text_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--text_column_name {data_args.text_column_name} not found in dataset"
-            f" '{data_args.dataset_name}'. Make sure to set `--text_column_name` to the"
-            " correct text column - one of"
-            f" {', '.join(next(iter(raw_datasets.values())).column_names)}."
-        )
+        if data_args.eval_text_column_name != "text":
+            raw_datasets["eval"] = raw_datasets["eval"].rename_column(data_args.eval_text_column_name, "text")
+    else:
+        # load multiple eval sets
+        for dataset_dict in dataset_names_dict:
+            if dataset_dict["name"] == "esb/diagnostic-dataset":
+                # for the ESB diagnostic dataset, the dataset name is effectively the config
+                pretty_name = f"{dataset_dict['config']}-diagnostic/{dataset_dict['split']}"
+            else:
+                pretty_name = f"{dataset_dict['name'].split('/')[-1]}/{dataset_dict['split'].replace('.', '-')}"
+            all_eval_splits.append(pretty_name)
+            raw_datasets[pretty_name] = load_dataset(
+                dataset_dict["name"],
+                dataset_dict["config"],
+                split=dataset_dict["split"],
+                cache_dir=data_args.dataset_cache_dir,
+                token=model_args.token,
+                streaming=data_args.streaming,
+            )
+            # make column names consistent (text, audio)
+            if dataset_dict["text_column_name"] != "text":
+                raw_datasets[pretty_name] = raw_datasets[pretty_name].rename_column(
+                    dataset_dict["text_column_name"], "text"
+                )
+            raw_datasets[pretty_name] = raw_datasets[pretty_name].remove_columns(
+                set(raw_datasets[pretty_name].features.keys()) - {"audio", "text"}
+            )
 
     # 7. Load pretrained model, tokenizer, and feature extractor
     config = WhisperConfig.from_pretrained(
@@ -565,7 +631,7 @@ def main():
     )
 
     if data_args.max_samples_per_split is not None:
-        for split in data_splits:
+        for split in all_eval_splits:
             raw_datasets[split] = (
                 raw_datasets[split].take(data_args.max_samples_per_split)
                 if data_args.streaming
@@ -728,7 +794,7 @@ def main():
         f"  Total eval batch size (w. parallel & distributed) = {training_args.per_device_eval_batch_size * accelerator.num_processes}"
     )
     logger.info(f"  Predict labels with timestamps = {return_timestamps}")
-    for split in data_splits:
+    for split in all_eval_splits:
         eval_step(split=split)
         accelerator.wait_for_everyone()
     accelerator.end_training()
