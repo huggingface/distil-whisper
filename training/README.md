@@ -217,13 +217,16 @@ from the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430), which is a we
 KL-divergence loss terms.
 
 The following command takes the Common Voice dataset that was pseudo-labelled in the first stage and trains the 
-2-layer decoder model intialised in the previous step. Note that multiple training datasets and splits can be loaded 
-by separating the dataset arguments by `+` symbols. Thus, the script generalises to any number of training datasets.
+2-layer decoder model intialised in the previous step. We pass the local path to the pseudo-labelled Common Voice dataset
+(`../common_voice_13_0_hi_pseudo_labelled`), which you can change to the path where your local pseudo-labelled dataset is 
+saved.
 
 In this example, we will combine the train and validation splits to give our training set, and evaluate on the test split 
 only. This is purely to demonstrate how to combine multiple pseudo-labelled datasets for training, rather than recommended 
 advice for defining train/validation splits. We advise that you train on the train splits of your dataset, evaluate and 
-tune hyper-parameters on the validation split, and only test the final checkpoint on the test split.
+tune hyper-parameters on the validation split, and only test the final checkpoint on the test split. Note how multiple 
+training datasets and splits can be loaded by separating the dataset arguments by `+` symbols. Thus, the script generalises 
+to any number of training datasets.
 
 ```bash
 #!/usr/bin/env bash
@@ -269,7 +272,9 @@ accelerate launch run_distillation.py \
 The above training script will take approximately 1 hour to complete on an 80 GB A100 GPU and yield a final WER of 43%.
 This is reasonable for 1000 training steps and just 15 hours of un-filtered training data, but over twice the error rate of the 
 pre-trained model. As mentioned above, using upwards of 1000 hours of data and training for 10k steps will likely yield
-more competitive performance.
+more competitive performance. For the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430), we trained on 21k hours
+of audio data for 80k steps. We found that upwards of 13k hours of audio data was required to reach convergence on English 
+ASR (see Section 9.1), so the more data you have, the better!
 
 Scaling to multiple GPUs using [distributed data parallelism (DDP)](https://pytorch.org/tutorials/beginner/ddp_series_theory.html)
 is trivial: simply run `accelerate config` and select the multi-GPU option, specifying the IDs of the GPUs you wish to use. The 
@@ -285,6 +290,9 @@ There are a few noteworthy arguments that can be configured to give optimal trai
 4. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
 5. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model
 6. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
+
+TODO:
+- [ ] Template for model cards
 
 ## 4. Evaluation
 
@@ -419,3 +427,25 @@ minimum values for the pre-trained WER / training data to achieve reasonable per
 |-------------|---------------------|-------------------|
 | Fine-tuning | > 20                | < 1000            |
 | KD          | < 20                | > 1000            |
+
+## Acknowledgements
+
+* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
+* Hugging Face 🤗 [Transformers](https://github.com/huggingface/transformers) for the Whisper model implementation
+* Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) program for Cloud TPU v4s used to train the official Distil-Whisper models
+* The Hugging Face 🤗 cluster for GPU compute for experimenting with the PyTorch scripts
+
+## Citation
+
+If you use this code-base, please consider citing the Distil-Whisper paper:
+
+```
+@misc{gandhi2023distilwhisper,
+      title={Distil-Whisper: Robust Knowledge Distillation via Large-Scale Pseudo Labelling}, 
+      author={Sanchit Gandhi and Patrick von Platen and Alexander M. Rush},
+      year={2023},
+      eprint={2311.00430},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+```
