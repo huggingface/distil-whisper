@@ -78,12 +78,12 @@ class ModelArguments:
             "specify the folder name here."
         },
     )
-    use_auth_token: bool = field(
-        default=False,
+    token: str = field(
+        default=None,
         metadata={
             "help": (
-                "Will use the token generated when running `transformers-cli login`"
-                " (necessary to use this script with private models)."
+                "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
+                "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
             )
         },
     )
@@ -203,7 +203,7 @@ class DataTrainingArguments:
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
     )
     wandb_project: str = field(
-        default="distil-whisper",
+        default="distil-whisper-long-form",
         metadata={"help": "The name of the wandb project."},
     )
     wandb_name: str = field(
@@ -445,7 +445,7 @@ def main():
             dataset_dict["config"],
             split=dataset_dict["split"],
             cache_dir=data_args.dataset_cache_dir,
-            use_auth_token=True if model_args.use_auth_token else None,
+            token=model_args.token,
             streaming=data_args.streaming,
         )
         if dataset_dict["text_column_name"] not in list(raw_datasets[pretty_name].features.keys()):
@@ -490,7 +490,6 @@ def main():
 
     model_kwargs = {
         "cache_dir": model_args.cache_dir,
-        "use_auth_token": True if model_args.use_auth_token else None,
         "subfolder": model_args.subfolder,
     }
 
@@ -530,7 +529,7 @@ def main():
     # 8. Load Metric
     whisper_tokenizer = WhisperTokenizer.from_pretrained("openai/whisper-tiny.en")
     normalizer = (
-        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(whisper_tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer() if model_args.language is not None else EnglishTextNormalizer(whisper_tokenizer.english_spelling_normalizer)
     )
 
     def compute_metrics(pred_str, label_str, ngram_degree=5):
@@ -605,6 +604,7 @@ def main():
     logger.info("***** Running Eval *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
     logger.info(f"  Total eval batch size (w. parallel & distributed) = {training_args.per_device_eval_batch_size}")
+    logger.info(f"  Return timestamps = {model_args.return_timestamps}")
     if pipe.model.can_generate():
         logger.info(f"  Beam size = {num_beams}")
         if num_beams > 1:
