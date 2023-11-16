@@ -5,7 +5,7 @@
 [[Colab]](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb)
 
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% word 
-error rate (WER)** on out-of-distribution evaluation sets.
+error rate (WER)** on out-of-distribution evaluation sets:
 
 | Model                                                                      | Params / M | Rel. Latency | Short-Form WER | Long-Form WER |
 |----------------------------------------------------------------------------|------------|--------------|----------------|---------------|
@@ -14,7 +14,7 @@ error rate (WER)** on out-of-distribution evaluation sets.
 | [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8          | 10.1           | **11.6**      |
 | [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | **394**    | **6.8**      | 11.1           | 12.4          |
 
-**Note:** Distil-Whisper is currently only available for English speech recognition. Multilingual support will be provided soon.
+**Note:** Distil-Whisper is currently only available for English speech recognition. We are working with the community to distill Whisper on other languages. If you are interested in distilling Whisper in your language, check out the provided [training code](training). We will soon update the repository with multilingual checkpoints are ready!
 
 ## 1. Usage
 
@@ -355,9 +355,9 @@ For full details on the distillation set-up and evaluation results, refer to the
 
 ## 4. Training Code
 
-Training code to reproduce Distil-Whisper will be published here shortly. We will also release more general code to distill
-Whisper for multilingual speech recognition, facilitating anyone in the community to distill Whisper on their choice of 
-language.
+Training code to reproduce Distil-Whisper can be found in the directory [training](training). This code has been adapted 
+be general enough to distill Whisper for multilingual speech recognition, facilitating anyone in the community to distill 
+Whisper on their choice of language.
 
 ## 5. Acknowledgements
 * OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
