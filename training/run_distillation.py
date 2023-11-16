@@ -329,15 +329,6 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
-    mse_weight: Optional[float] = field(
-        default=0.0,
-        metadata={
-            "help": (
-                "Weighting assigned to the MSE loss in the KD formulation. MSE loss is "
-                "computed between the teacher-student hidden states and attentions."
-            )
-        },
-    )
     dtype: Optional[str] = field(
         default="float32",
         metadata={
@@ -1374,31 +1365,6 @@ def main():
         divergence = divergence.sum() / padding_mask.sum()
         return divergence
 
-    def mean_square_error_loss(student_outputs, teacher_outputs):
-        # tie encoder embeddings
-        mse = torch.mean(
-            torch.square(teacher_outputs.encoder_hidden_states[0] - student_outputs.encoder_hidden_states[0])
-        )
-
-        for student_layer_id, teacher_layer_id in encoder_layer_mapping.items():
-            # offset the hidden-state layer ids by 1 to account for the extra embedding hidden-state
-            student_hidden_state = student_outputs.encoder_hidden_states[student_layer_id + 1]
-            teacher_hidden_state = teacher_outputs.encoder_hidden_states[teacher_layer_id + 1]
-            mse += torch.mean(torch.square(teacher_hidden_state - student_hidden_state))
-
-        # tie decoder embeddings
-        mse += torch.mean(
-            torch.square(teacher_outputs.decoder_hidden_states[0] - student_outputs.decoder_hidden_states[0])
-        )
-
-        for student_layer_id, teacher_layer_id in decoder_layer_mapping.items():
-            # offset the hidden-state layer ids by 1 to account for the extra embedding hidden-state
-            student_hidden_state = student_outputs.decoder_hidden_states[student_layer_id + 1]
-            teacher_hidden_state = teacher_outputs.decoder_hidden_states[teacher_layer_id + 1]
-            mse += torch.mean(torch.square(teacher_hidden_state - student_hidden_state))
-
-        return mse
-
     # Define gradient update step fn
     def train_step(
         batch,
@@ -1427,16 +1393,9 @@ def main():
         # KL-divergence loss (scaled by temperature)
         kl_loss = kl_divergence(teacher_distribution, student_distribution, batch["labels"]) * temperature**2
 
-        # MSE loss between enc-dec hidden-states and attentions
-        mse_loss = (
-            mean_square_error_loss(student_outputs, teacher_outputs)
-            if output_hidden_states
-            else torch.zeros_like(kl_loss)
-        )
-
-        # use DistilBart formulation - only tune the MSE weight and take remaining HPs from DistilBERT
-        loss = 0.8 * ce_loss + training_args.kl_weight * kl_loss + training_args.mse_weight * mse_loss
-        metrics = {"loss": loss, "ce_loss": ce_loss, "kl_loss": kl_loss, "mse_loss": mse_loss}
+        # use Distil-Whisper formulation (fix weight of CE loss and tune KL weight)
+        loss = 0.8 * ce_loss + training_args.kl_weight * kl_loss
+        metrics = {"loss": loss, "ce_loss": ce_loss, "kl_loss": kl_loss}
         return loss, metrics
 
     # Define eval fn
@@ -1464,15 +1423,9 @@ def main():
         # temperature is always 1 for eval
         kl_loss = kl_divergence(teacher_distribution, student_distribution, batch["labels"])
 
-        mse_loss = (
-            mean_square_error_loss(student_outputs, teacher_outputs)
-            if output_hidden_states
-            else torch.zeros_like(kl_loss)
-        )
-
-        # use DistilBart formulation - only tune the MSE weight and take remaining HPs from DistilBERT
-        loss = 0.8 * ce_loss + training_args.kl_weight * kl_loss + training_args.mse_weight * mse_loss
-        metrics = {"loss": loss, "ce_loss": ce_loss, "kl_loss": kl_loss, "mse_loss": mse_loss}
+        # use Distil-Whisper formulation (fix weight of CE loss and tune KL weight)
+        loss = 0.8 * ce_loss + training_args.kl_weight * kl_loss
+        metrics = {"loss": loss, "ce_loss": ce_loss, "kl_loss": kl_loss}
         return metrics
 
     def generate_step(batch):
