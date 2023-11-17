@@ -256,6 +256,7 @@ accelerate launch run_distillation.py \
   --per_device_eval_batch_size 64 \
   --dataloader_num_workers 16 \
   --preprocessing_num_workers 16 \
+  --ddp_timeout 7200 \
   --dtype "bfloat16" \
   --output_dir "./" \
   --do_train \

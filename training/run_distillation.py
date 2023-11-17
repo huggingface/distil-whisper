@@ -25,7 +25,6 @@ import shutil
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -36,7 +35,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import Accelerator, InitProcessGroupKwargs
+from accelerate import Accelerator
 from accelerate.logging import get_logger
 from datasets import (
     DatasetDict,
@@ -208,7 +207,7 @@ class DataTrainingArguments:
         metadata={"help": "The name of the dataset column containing the audio data. Defaults to 'audio'"},
     )
     text_column_name: str = field(
-        default="text",
+        default=None,
         metadata={"help": "The name of the dataset column containing the text data in the training set."},
     )
     eval_text_column_name: str = field(
@@ -725,14 +724,11 @@ def main():
         mixed_precision = "no"
         teacher_dtype = torch.float32
 
-    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=7200))
-
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
         mixed_precision=mixed_precision,
         log_with=training_args.report_to,
         project_dir=training_args.output_dir,
-        kwargs_handlers=[kwargs],
     )
 
     accelerator.init_trackers(project_name=data_args.wandb_project)
@@ -960,6 +956,7 @@ def main():
         config.save_pretrained(training_args.output_dir)
         student_model.generation_config.save_pretrained(training_args.output_dir)
 
+    accelerator.wait_for_everyone()
     processor = WhisperProcessor.from_pretrained(training_args.output_dir)
 
     # 9. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
@@ -1155,15 +1152,12 @@ def main():
             raw_datasets["train"].map,
             function=prepare_train_dataset,
             remove_columns=raw_datasets_train_features,
-            batched=True,
-            batch_size=max(training_args.per_device_train_batch_size, 4),  # TODO(SG) make data prep bs configurable
         )
-        if accelerator.is_main_process:
-            vectorized_datasets["train"] = (
-                map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
-                if not data_args.streaming
-                else map_fn_train()
-            )
+        vectorized_datasets["train"] = (
+            map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
+            if not data_args.streaming
+            else map_fn_train()
+        )
     if training_args.do_eval:
         for eval_split in all_eval_splits:
             raw_datasets_eval_features = list(raw_datasets[eval_split].features.keys())
