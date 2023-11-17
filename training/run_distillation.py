@@ -1152,6 +1152,8 @@ def main():
             raw_datasets["train"].map,
             function=prepare_train_dataset,
             remove_columns=raw_datasets_train_features,
+            batched=True,
+            batch_size=max(training_args.per_device_train_batch_size // 4, 4),  # TODO(SG) make data prep bs configurable
         )
         vectorized_datasets["train"] = (
             map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
