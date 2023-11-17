@@ -33,7 +33,7 @@ training and inference.
 The instructions for installing the package are as follows:
 1. Install PyTorch from the [official instructions](https://pytorch.org/get-started/locally/), ensuring you install the correct version for your hardware and CUDA version.
 2. Fork the `distil-whisper` repository by clicking on the [fork](https://github.com/huggingface/distil-whisper/fork) button on the reopsitory's page
-3. Clone the `distil_whisper` repository and add the base repository as a remote. This will allow you to "pull" any upstream changes that are made to the base repository:
+3. Clone the `distil-whisper` repository and add the base repository as a remote. This will allow you to "pull" any upstream changes that are made to the base repository:
 
 ```bash
 git clone https://github.com/<your GitHub handle>/distil-whisper.git
@@ -183,7 +183,7 @@ git lfs install
 git clone https://huggingface.co/sanchit-gandhi/distil-whisper-large-v2-hi
 ```
 
-Be sure to change the repo address to https://huggingface.co/<your-user-name>/<your-repo-name>.
+Be sure to change the repo address to `https://huggingface.co/<your-user-name>/<your-repo-name>`
 
 We can now copy the relevant training scrips to the repository:
 ```bash

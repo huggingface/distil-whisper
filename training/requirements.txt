@@ -6,5 +6,4 @@ jiwer
 evaluate>=0.4.1
 wandb
 tensorboard
-tensorflow-cpu
 nltk
