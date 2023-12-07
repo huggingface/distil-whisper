@@ -659,7 +659,7 @@ def rotate_checkpoints(save_total_limit=None, output_dir=None, checkpoint_prefix
         shutil.rmtree(checkpoint, ignore_errors=True)
 
 
-_RE_CHECKPOINT = re.compile(r"^" + "checkpoint" + r"\-(\d+)$")
+_RE_CHECKPOINT = re.compile(r"^checkpoint-(\d+)-epoch-(\d+)$")
 
 
 def get_last_checkpoint(folder):
