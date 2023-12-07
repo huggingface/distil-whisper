@@ -10,10 +10,16 @@ error rate (WER)** on out-of-distribution evaluation sets:
 
 | Model                                                                      | Params / M | Rel. Latency | Short-Form WER | Long-Form WER |
 |----------------------------------------------------------------------------|------------|--------------|----------------|---------------|
-| [whisper-large-v2](https://huggingface.co/openai/whisper-large-v2)         | 1550       | 1.0          | **9.1**        | 11.7          |
+| [large-v2](https://huggingface.co/openai/whisper-large-v2)                 | 1550       | 1.0          | **9.1**        | 11.7          |
 |                                                                            |            |              |                |               |
 | [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8          | 10.1           | **11.6**      |
-| [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | **394**    | **6.8**      | 11.1           | 12.4          |
+| [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | 394        | **6.8**      | 11.1           | 12.4          |
+| [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en)   | **166**    | 5.6          | 12.1           | 12.8          |
+
+For applications where latency and accuracy are important, we recommend the [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en)
+or [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2) checkpoints. For resource-constrained applications,
+such as on-device or mobile applications, the [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en) is a great choice, since
+it is only 166M parameters, while performing within 3% WER of Whisper large-v2.
 
 **Note:** Distil-Whisper is currently only available for English speech recognition. We are working with the community to distill Whisper on other languages. If you are interested in distilling Whisper in your language, check out the provided [training code](training). We will soon update the repository with multilingual checkpoints when ready!
 
@@ -290,12 +296,12 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, torch_dtype=torch_dt
 Distil-Whisper has support in the following libraries with the original "sequential" long-form transcription algorithm. 
 Click the links in the table to see the relevant code-snippets for each:
 
-| Library         | distil-medium.en                                                                                 | distil-large-v2                                                                                 |
-|-----------------|--------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| OpenAI Whisper  | [link](https://huggingface.co/distil-whisper/distil-medium.en#running-whisper-in-openai-whisper) | [link](https://huggingface.co/distil-whisper/distil-large-v2#running-whisper-in-openai-whisper) |
-| Whisper cpp     | [link](https://huggingface.co/distil-whisper/distil-medium.en#whispercpp)                        | [link](https://huggingface.co/distil-whisper/distil-large-v2#whispercpp)                        |
-| Transformers js | [link](https://huggingface.co/distil-whisper/distil-medium.en#transformersjs)                    | [link](https://huggingface.co/distil-whisper/distil-large-v2#transformersjs)                    |
-| Candle (Rust)   | [link](https://huggingface.co/distil-whisper/distil-medium.en#candle)                            | [link](https://huggingface.co/distil-whisper/distil-large-v2#candle)                            |
+| Library         | distil-small.en                                                                                 | distil-medium.en                                                                                 | distil-large-v2                                                                                 |
+|-----------------|-------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| OpenAI Whisper  | [link](https://huggingface.co/distil-whisper/distil-small.en#running-whisper-in-openai-whisper) | [link](https://huggingface.co/distil-whisper/distil-medium.en#running-whisper-in-openai-whisper) | [link](https://huggingface.co/distil-whisper/distil-large-v2#running-whisper-in-openai-whisper) |
+| Whisper cpp     | [link](https://huggingface.co/distil-whisper/distil-small.en#whispercpp)                        | [link](https://huggingface.co/distil-whisper/distil-medium.en#whispercpp)                        | [link](https://huggingface.co/distil-whisper/distil-large-v2#whispercpp)                        |
+| Transformers js | [link](https://huggingface.co/distil-whisper/distil-small.en#transformersjs)                    | [link](https://huggingface.co/distil-whisper/distil-medium.en#transformersjs)                    | [link](https://huggingface.co/distil-whisper/distil-large-v2#transformersjs)                    |
+| Candle (Rust)   | [link](https://huggingface.co/distil-whisper/distil-small.en#candle)                            | [link](https://huggingface.co/distil-whisper/distil-medium.en#candle)                            | [link](https://huggingface.co/distil-whisper/distil-large-v2#candle)                            |
 
 Updates will be posted here with the integration of the "chunked" long-form transcription algorithm into the respective 
 libraries.
