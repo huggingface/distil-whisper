@@ -593,7 +593,7 @@ def load_multiple_datasets(
         # resample to specified sampling rate
         dataset = dataset.cast_column("audio", datasets.features.Audio(sampling_rate))
         dataset_features = dataset.features.keys()
-        columns_to_keep = {"audio", "sentence"}
+        columns_to_keep = {"audio", "text"}
 
         if dataset_dict["text_column_name"] not in dataset_features:
             raise ValueError(
@@ -603,8 +603,8 @@ def load_multiple_datasets(
             )
 
         # blanket renaming of all transcription columns to text
-        if dataset_dict["text_column_name"] != "sentence":
-            dataset = dataset.rename_column(dataset_dict["text_column_name"], "sentence")
+        if dataset_dict["text_column_name"] != "text":
+            dataset = dataset.rename_column(dataset_dict["text_column_name"], "text")
 
         if use_pseudo_labels:
             if "whisper_transcript" not in dataset_features:
@@ -1025,7 +1025,7 @@ def main():
     )
     wer_threshold = data_args.wer_threshold
     use_pseudo_labels = data_args.use_pseudo_labels
-    train_text_column_name = "whisper_transcript" if use_pseudo_labels else "sentence"
+    train_text_column_name = "whisper_transcript" if use_pseudo_labels else "text"
 
     # 10.2: filter based on maximum number of training/evaluation samples
     if training_args.do_train and data_args.max_train_samples is not None:
@@ -1066,7 +1066,7 @@ def main():
     filter_by_wer_threshold = partial(
         raw_datasets["train"].filter,
         function=is_wer_in_range,
-        input_columns=["sentence", "whisper_transcript"],
+        input_columns=["text", "whisper_transcript"],
     )
 
     if wer_threshold is not None and use_pseudo_labels:
