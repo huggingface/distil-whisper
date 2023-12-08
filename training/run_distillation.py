@@ -271,7 +271,17 @@ class DataTrainingArguments:
         default=None,
         metadata={
             "help": "Filter training data with Whisper transcriptions that have greater than `wer_threshold` "
-            "WER with the normalised transcriptions."
+            "WER with the normalised transcriptions. This only takes effect if training on pseudo-labels targets."
+            "If `--use_pseudo_labels=False`, then no WER filtering is performed, since we train directly on the text"
+            "transcriptions."
+        },
+    )
+    use_pseudo_labels: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to use pseudo-label transcriptions as the targets. If True, the pseudo-labels "
+            "must be in the dataset column `whisper_transcript` from the previous pseudo-labelling step. This is "
+            "not currently yet configurable."
         },
     )
     timestamp_probability: float = field(
@@ -553,6 +563,7 @@ def load_multiple_datasets(
     streaming: Optional[bool] = True,
     seed: Optional[int] = None,
     accelerator: Optional[Accelerator] = None,
+    use_pseudo_labels: float = None,
     **kwargs,
 ) -> IterableDataset:
     dataset_names_dict = convert_dataset_str_to_list(
@@ -564,17 +575,6 @@ def load_multiple_datasets(
         probabilities = np.array(dataset_samples) / np.sum(dataset_samples)
     else:
         probabilities = None
-
-    if len(dataset_names_dict) == 1:
-        dataset_dict = dataset_names_dict[0]
-        # we have a single dataset so just return it as is
-        return load_dataset(
-            dataset_dict["name"],
-            dataset_dict["config"],
-            split=dataset_dict["split"],
-            streaming=streaming,
-            **kwargs,
-        )
 
     all_datasets = []
     # iterate over the datasets we want to interleave
@@ -592,10 +592,35 @@ def load_multiple_datasets(
         )
         # resample to specified sampling rate
         dataset = dataset.cast_column("audio", datasets.features.Audio(sampling_rate))
-        if dataset_dict["text_column_name"] != "text":
-            dataset = dataset.rename_column(dataset_dict["text_column_name"], "text")
-        dataset = dataset.remove_columns(set(dataset.features.keys()) - {"audio", "text", "whisper_transcript"})
+        dataset_features = dataset.features.keys()
+        columns_to_keep = {"audio", "sentence"}
+
+        if dataset_dict["text_column_name"] not in dataset_features:
+            raise ValueError(
+                f"Text column name {dataset_dict['text_column_name']} not found in dataset"
+                f" '{dataset_dict['name']}'. Make sure to set `--text_column_name` to the"
+                f" correct text column - one of {', '.join(dataset_features)}."
+            )
+
+        # blanket renaming of all transcription columns to text
+        if dataset_dict["text_column_name"] != "sentence":
+            dataset = dataset.rename_column(dataset_dict["text_column_name"], "sentence")
+
+        if use_pseudo_labels:
+            if "whisper_transcript" not in dataset_features:
+                raise ValueError(
+                    f"Pseudo-label column `whisper_transcript` not found in dataset {dataset_dict['name']}. Ensure"
+                    "pseudo-labels are present in the dataset under this column name, or train directly on the text "
+                    "labels by setting `--use_pseudo_labels=False` and defining the appropriate `--text_column_name`."
+                )
+            columns_to_keep.add("whisper_transcript")
+        dataset_features = dataset.features.keys()
+        dataset = dataset.remove_columns(set(dataset_features - columns_to_keep))
         all_datasets.append(dataset)
+
+    if len(all_datasets) == 1:
+        # we have a single dataset so just return it as is
+        return all_datasets[0]
 
     if streaming:
         interleaved_dataset = interleave_datasets(
@@ -801,6 +826,7 @@ def main():
             data_args.train_dataset_config_name,
             splits=data_args.train_split_name,
             text_column_names=data_args.text_column_name,
+            use_pseudo_labels=data_args.use_pseudo_labels,
             streaming=data_args.streaming,
             dataset_samples=data_args.train_dataset_samples,
             seed=training_args.seed,
@@ -998,6 +1024,8 @@ def main():
         BasicTextNormalizer() if language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
     wer_threshold = data_args.wer_threshold
+    use_pseudo_labels = data_args.use_pseudo_labels
+    train_text_column_name = "whisper_transcript" if use_pseudo_labels else "sentence"
 
     # 10.2: filter based on maximum number of training/evaluation samples
     if training_args.do_train and data_args.max_train_samples is not None:
@@ -1038,10 +1066,10 @@ def main():
     filter_by_wer_threshold = partial(
         raw_datasets["train"].filter,
         function=is_wer_in_range,
-        input_columns=["text", "whisper_transcript"],
+        input_columns=["sentence", "whisper_transcript"],
     )
 
-    if wer_threshold is not None:
+    if wer_threshold is not None and use_pseudo_labels:
         raw_datasets["train"] = (
             filter_by_wer_threshold(num_proc=num_workers, desc="filtering train dataset by wer")
             if not data_args.streaming
@@ -1071,7 +1099,7 @@ def main():
         batch["input_length"] = [len(sample) for sample in audio]
 
         # process text targets - for training these are the Whisper-generated pseudo-labels
-        input_str_batched = batch["whisper_transcript"]
+        input_str_batched = batch[train_text_column_name]
 
         all_token_ids = []
         all_token_ids_unprompted = []
@@ -1153,7 +1181,9 @@ def main():
             function=prepare_train_dataset,
             remove_columns=raw_datasets_train_features,
             batched=True,
-            batch_size=max(training_args.per_device_train_batch_size // 4, 4),  # TODO(SG) make data prep bs configurable
+            batch_size=max(
+                training_args.per_device_train_batch_size // 4, 4
+            ),  # TODO(SG) make data prep bs configurable
         )
         vectorized_datasets["train"] = (
             map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
