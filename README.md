@@ -8,13 +8,13 @@
 Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% word 
 error rate (WER)** on out-of-distribution evaluation sets:
 
-| Model                                                                      | Params / M | Rel. Latency | Short-Form WER | Long-Form WER |
-|----------------------------------------------------------------------------|------------|--------------|----------------|---------------|
-| [large-v2](https://huggingface.co/openai/whisper-large-v2)                 | 1550       | 1.0          | **9.1**        | 11.7          |
-|                                                                            |            |              |                |               |
-| [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8          | 10.1           | **11.6**      |
-| [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | 394        | **6.8**      | 11.1           | 12.4          |
-| [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en)   | **166**    | 5.6          | 12.1           | 12.8          |
+| Model                                                                      | Params / M | Rel. Latency ↑ | Short-Form WER ↓ | Long-Form WER ↓ |
+|----------------------------------------------------------------------------|------------|----------------|------------------|-----------------|
+| [large-v2](https://huggingface.co/openai/whisper-large-v2)                 | 1550       | 1.0            | **9.1**          | 11.7            |
+|                                                                            |            |                |                  |                 |
+| [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8            | 10.1             | **11.6**        |
+| [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | 394        | **6.8**        | 11.1             | 12.4            |
+| [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en)   | **166**    | 5.6            | 12.1             | 12.8            |
 
 For applications where latency and accuracy are important, we recommend the [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en)
 or [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2) checkpoints. For resource-constrained applications,
@@ -179,8 +179,7 @@ For more information on how to customize the automatic speech recognition pipeli
 
 ### Speculative Decoding
 
-Distil-Whisper can be used as an assistant model to Whisper for speculative decoding. As a refresher, we recommend reading Joao's [amazing blog post](https://huggingface.co/blog/assisted-generation) or taking a look at [the original paper](https://arxiv.org/abs/2211.17192).
-
+Distil-Whisper can be used as an assistant model to Whisper for [speculative decoding](https://huggingface.co/blog/whisper-speculative-decoding). 
 Speculative decoding mathematically ensures the exact same outputs as Whisper are obtained while being 2 times faster. 
 This makes it the perfect drop-in replacement for existing Whisper pipelines, since the same outputs are guaranteed.
 
@@ -254,6 +253,11 @@ print(result["text"])
 **Note:** speculative decoding should be on average 2x faster than using "only" Whisper large-v2 at a mere 8% increase 
 in VRAM memory usage while mathematically ensuring the same results. This makes it the perfect replacement for Whisper large-v2
 in existing speech recognition pipelines.
+
+For more details on speculative decoding, refer to the following resources:
+* [Speculative decoding for 2x faster Whisper inference](https://huggingface.co/blog/whisper-speculative-decoding) blog post by Sanchit Gandhi
+* [Assisted Generation: a new direction toward low-latency text generation](https://huggingface.co/blog/assisted-generation) blog post by Joao Gante
+* [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192) paper by Leviathan et. al.
 
 ### Additional Speed & Memory Improvements
 
