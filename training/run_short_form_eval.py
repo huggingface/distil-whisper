@@ -130,14 +130,7 @@ class ModelArguments:
     )
     attn_type: Optional[str] = field(
         default=None,
-        metadata={
-            "help": (
-                "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
-                "1. `None`: default Transformers attention implementation."
-                "2. `flash_attn`: Flash Attention through PyTorch SDPA. Requires `torch>=2.0` and `optimum` to be installed. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)"
-                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)"
-            )
-        },
+        metadata={"help": "Which attn type to use: ['eager', 'sdpa', 'flash_attention_2']"},
     )
 
 
@@ -516,8 +509,8 @@ def main():
             token=model_args.token,
             streaming=data_args.streaming,
         )
-        if data_args.eval_text_column_name != "text":
-            raw_datasets["eval"] = raw_datasets["eval"].rename_column(data_args.eval_text_column_name, "text")
+        if data_args.text_column_name != "text":
+            raw_datasets["eval"] = raw_datasets["eval"].rename_column(data_args.text_column_name, "text")
     else:
         # load multiple eval sets
         for dataset_dict in dataset_names_dict:
@@ -579,18 +572,8 @@ def main():
         token=token,
         low_cpu_mem_usage=True,
         torch_dtype=torch_dtype,
-        use_flash_attention_2=model_args.attn_type == "flash_attn_2",
+        attn_implementation=model_args.attn_type,
     )
-
-    if model_args.attn_type == "flash_attn":
-        model = model.to_bettertransformer()
-    elif model_args.attn_type not in [None, "flash_attn", "flash_attn_2"]:
-        raise ValueError(
-            f"Argument `attn_type` is set to {model_args.attn_type}. Should be one of:"
-            "1. `None`: default Transformers attention implementation."
-            "2. `flash_attn`: Flash Attention through PyTorch SDPA. Requires `torch>=2.0` and `optimum` to be installed. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
-            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-        )
 
     model.eval()
 
@@ -624,7 +607,6 @@ def main():
     audio_column_name = data_args.audio_column_name
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
-    text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     normalizer = (
         BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
@@ -646,8 +628,7 @@ def main():
         batch[model_input_name] = inputs.get(model_input_name)[0]
 
         # process targets
-        input_str = batch[text_column_name]
-        batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
+        batch["labels"] = tokenizer(batch["text"], max_length=max_label_length, truncation=True).input_ids
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
