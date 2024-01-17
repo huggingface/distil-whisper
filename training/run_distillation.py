@@ -1555,8 +1555,11 @@ def main():
                         rotate_checkpoints(training_args.save_total_limit, output_dir=training_args.output_dir)
 
                         if cur_step == total_train_steps:
+                            # un-wrap student model for save
                             student_model = accelerator.unwrap_model(student_model)
                             student_model.save_pretrained(training_args.output_dir)
+                            # re-wrap student model for final eval
+                            student_model = accelerator.prepare(student_model)
 
                         if training_args.push_to_hub:
                             repo.push_to_hub(
