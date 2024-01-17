@@ -563,6 +563,19 @@ def main():
         revision=model_args.model_revision,
         token=token,
     )
+
+    # set attn_type in a backwards compatible way
+    if model_args.attn_type == "flash_attn":
+        attn_type = "sdpa"
+    elif model_args.attn_type == "flash_attn_2":
+        attn_type = "flash_attention_2"
+    elif model_args.attn_type in [None, "eager", "sdpa", "flash_attention_2"]:
+        attn_type = model_args.attn_type
+    else:
+        raise ValueError(
+            f"`attn_type` should be one of ['eager', 'sdpa', 'flash_attention_2'], got {model_args.attn_type}."
+        )
+
     model = WhisperForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
         config=config,
@@ -572,7 +585,7 @@ def main():
         token=token,
         low_cpu_mem_usage=True,
         torch_dtype=torch_dtype,
-        attn_implementation=model_args.attn_type,
+        attn_implementation=attn_type,
     )
 
     model.eval()
