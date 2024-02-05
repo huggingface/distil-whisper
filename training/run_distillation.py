@@ -186,6 +186,10 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "The number of processes to use for the preprocessing if using non-streaming mode."},
     )
+    preprocessing_batch_size: Optional[int] = field(
+        default=256,
+        metadata={"help": "Number of examples per batch provided to the `prepare_dataset` function."},
+    )
     max_train_samples: Optional[int] = field(
         default=None,
         metadata={
@@ -1182,9 +1186,7 @@ def main():
             function=prepare_train_dataset,
             remove_columns=raw_datasets_train_features,
             batched=True,
-            batch_size=max(
-                training_args.per_device_train_batch_size // 4, 4
-            ),  # TODO(SG) make data prep bs configurable
+            batch_size=data_args.preprocessing_batch_size,
         )
         vectorized_datasets["train"] = (
             map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
