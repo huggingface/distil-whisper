@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
-# guynich workstation warning mitigation.
+# workstation warning mitigation.
 TOKENIZERS_PARALLELISM=false
 
-# guynich workstation error and freeze mitigation.
+# workstation error and freeze and OOM mitigation.
 # Set dtype to float16 (not bfloat16).
 # Set preprocessing_num_workers 1 (not 16).
 # Set dataloader_num_workers 8 (not 16)
+# Set batch size to 8.
 accelerate launch training/run_pseudo_labelling.py \
   --model_name_or_path "openai/whisper-large-v2" \
   --dataset_name "mozilla-foundation/common_voice_13_0" \
@@ -16,7 +17,7 @@ accelerate launch training/run_pseudo_labelling.py \
   --id_column_name "path" \
   --output_dir "./common_voice_13_0_hi_pseudo_labelled" \
   --wandb_project "distil-whisper-labelling" \
-  --per_device_eval_batch_size 64 \
+  --per_device_eval_batch_size 8 \
   --dtype "float16" \
   --dataloader_num_workers 8 \
   --preprocessing_num_workers 1 \

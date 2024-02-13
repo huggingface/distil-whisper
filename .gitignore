@@ -1,0 +1,3 @@
+# Ignore these.
+common_voice_13_0_hi_pseudo_labelled/
+wandb/
