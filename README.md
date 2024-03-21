@@ -10,16 +10,18 @@ error rate (WER)** on out-of-distribution evaluation sets:
 
 | Model                                                                      | Params / M | Rel. Latency ↑ | Short-Form WER ↓ | Long-Form WER ↓ |
 |----------------------------------------------------------------------------|------------|----------------|------------------|-----------------|
-| [large-v2](https://huggingface.co/openai/whisper-large-v2)                 | 1550       | 1.0            | **9.1**          | 11.7            |
+| [large-v3](https://huggingface.co/openai/whisper-large-v3)                 | 1550       | 1.0            | **8.4**          | 11.0            |
 |                                                                            |            |                |                  |                 |
-| [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8            | 10.1             | **11.6**        |
+| [distil-large-v3](https://huggingface.co/distil-whisper/distil-large-v3)   | 756        | 6.3            | 9.7              | **10.8**        |
+| [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2)   | 756        | 5.8            | 10.1             | 11.6            |
 | [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en) | 394        | **6.8**        | 11.1             | 12.4            |
 | [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en)   | **166**    | 5.6            | 12.1             | 12.8            |
 
-For applications where latency and accuracy are important, we recommend the [distil-medium.en](https://huggingface.co/distil-whisper/distil-medium.en)
-or [distil-large-v2](https://huggingface.co/distil-whisper/distil-large-v2) checkpoints. For resource-constrained applications,
-such as on-device or mobile applications, the [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en) is a great choice, since
-it is only 166M parameters, while performing within 3% WER of Whisper large-v2.
+For most applications, we recommend the latest [distil-large-v3](https://huggingface.co/distil-whisper/distil-large-v3) checkpoint,
+since it is the most performant distilled checkpoint and compatible across all Whisper libraries. The only exception is 
+resource-constrained applications with very little memory, such as on-device or mobile applications, where the 
+[distil-small.en](https://huggingface.co/distil-whisper/distil-small.en) is a great choice, since it is only 166M 
+parameters and performs within 4% WER of Whisper large-v3.
 
 **Note:** Distil-Whisper is currently only available for English speech recognition. We are working with the community to distill Whisper on other languages. If you are interested in distilling Whisper in your language, check out the provided [training code](training). We will soon update the repository with multilingual checkpoints when ready!
 
@@ -52,7 +54,7 @@ from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-model_id = "distil-whisper/distil-large-v2"
+model_id = "distil-whisper/distil-large-v3"
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
     model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
@@ -63,7 +65,7 @@ processor = AutoProcessor.from_pretrained(model_id)
 ```
 
 The model and processor can then be passed to the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
-Note that if you would like to have more control over the generation process, you can directly make use of `model.generate(...)` as shown [here](https://huggingface.co/docs/transformers/v4.34.1/en/model_doc/whisper#transformers.WhisperForConditionalGeneration.forward.example).
+Note that if you would like to have more control over the generation process, you can directly make use of model + processor API as shown below.
 
 ```python
 pipe = pipeline(
@@ -103,22 +105,80 @@ print(result["text"])
 For more information on how to customize the automatic speech recognition pipeline, please refer to the ASR pipeline [docs](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
 We also provide an end-to-end [Google Colab](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb) that benchmarks Whisper against Distil-Whisper.
 
-### Long-Form Transcription
+<details>
+<summary> For more control over the generation parameters, use the model + processor API directly: </summary>
 
-Distil-Whisper uses a chunked algorithm to transcribe long-form audio files longer than 30-seconds. In practice, this 
-chunked long-form algorithm is 9x faster than the sequential algorithm proposed by OpenAI in the Whisper paper 
-(see Table 7 of the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430)).
-
-We can load the model and processor as before:
+Ad-hoc generation arguments can be passed to `model.generate`, including `num_beams` for beam-search, `return_timestamps` 
+for segment-level timestamps, and `prompt_ids` for prompting. See the [docstrings](https://huggingface.co/docs/transformers/en/model_doc/whisper#transformers.WhisperForConditionalGeneration.generate)
+for more details.
 
 ```python
 import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+from datasets import Audio, load_dataset
+
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-model_id = "distil-whisper/distil-large-v2"
+model_id = "distil-whisper/distil-large-v3"
+
+model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+)
+model.to(device)
+
+processor = AutoProcessor.from_pretrained(model_id)
+
+dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+dataset = dataset.cast_column("audio", Audio(processor.feature_extractor.sampling_rate))
+sample = dataset[0]["audio"]
+
+input_features = processor(
+  sample["array"], sampling_rate=sample["sampling_rate"], return_tensors="pt"
+).input_features
+
+input_features = input_features.to(device, dtype=torch_dtype)
+
+gen_kwargs = {
+  "max_new_tokens": 128,
+  "num_beams": 1,
+  "return_timestamps": False,
+}
+
+pred_ids = model.generate(input_features, **gen_kwargs)
+pred_text = processor.batch_decode(pred_ids, skip_special_tokens=True, decode_with_timestamps=gen_kwargs["return_timestamps"])
+
+print(pred_text)
+```
+
+</details>
+
+### Sequential Long-Form
+
+The latest [distil-large-v3](https://huggingface.co/distil-whisper/distil-large-v3) checkpoint is specifically designed 
+to be compatible with OpenAI's sequential long-form transcription algorithm. This algorithm uses a sliding window for 
+buffered inference of long audio files (> 30-seconds), and returns more accurate transcriptions compared to the 
+[chunked long-form algorithm](#chunked-long-form).
+
+The sequential long-form algorithm should be used in either of the following scenarios:
+1. Transcription accuracy is the most important factor, and latency is less of a consideration
+2. You are transcribing **batches** of long audio files, in which case the latency of sequential is comparable to chunked, while being up to 0.5% WER more accurate
+
+If you are transcribing single long audio files and latency is the most important factor, you should use the chunked algorithm
+described [below](#chunked-long-form). For a detailed explanation of the different algorithms, refer to Sections 5 of 
+the [Distil-Whisper paper](https://arxiv.org/pdf/2311.00430.pdf).
+
+We start by loading the model and processor as before:
+
+```python
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+model_id = "distil-whisper/distil-large-v3"
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
     model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
@@ -128,7 +188,126 @@ model.to(device)
 processor = AutoProcessor.from_pretrained(model_id)
 ```
 
-To enable chunking, pass the `chunk_length_s` parameter to the `pipeline`. For Distil-Whisper, a chunk length of 15-seconds
+The model and processor can then be passed to the [`pipeline`](https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
+Note that if you would like to have more control over the generation process, you can directly make use of `model.generate(...)` API as shown below.
+
+```python
+pipe = pipeline(
+    "automatic-speech-recognition",
+    model=model,
+    tokenizer=processor.tokenizer,
+    feature_extractor=processor.feature_extractor,
+    max_new_tokens=128,
+    torch_dtype=torch_dtype,
+    device=device,
+)
+```
+
+Next, we load a long-form audio sample. Here, we use an example of concatenated samples from the LibriSpeech corpus:
+
+```python
+from datasets import load_dataset
+
+dataset = load_dataset("distil-whisper/librispeech_long", "clean", split="validation")
+sample = dataset[0]["audio"]
+```
+
+Finally, we can call the pipeline to transcribe the audio:
+
+```python
+result = pipe(sample)
+print(result["text"])
+```
+
+To transcribe a local audio file, simply pass the path to your audio file when you call the pipeline:
+
+```python
+result = pipe("audio.mp3")
+print(result["text"])
+```
+
+<details>
+
+<summary> For more control over the generation parameters, use the model + processor API directly: </summary>
+
+```python
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+from datasets import Audio, load_dataset
+
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+model_id = "distil-whisper/distil-large-v3"
+
+model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+)
+model.to(device)
+
+processor = AutoProcessor.from_pretrained(model_id)
+
+dataset = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+dataset = dataset.cast_column("audio", Audio(processor.feature_extractor.sampling_rate))
+sample = dataset[0]["audio"]
+
+inputs = processor(
+    sample["array"],
+    sampling_rate=sample["sampling_rate"],
+    return_tensors="pt",
+    truncation=False,
+    padding="longest",
+    return_attention_mask=True,
+)
+inputs = inputs.to(device, dtype=torch_dtype)
+
+gen_kwargs = {
+    "max_new_tokens": 448,
+    "num_beams": 1,
+    "condition_on_prev_tokens": False,
+    "compression_ratio_threshold": 1.35,  # zlib compression ratio threshold (in token space)
+    "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    "logprob_threshold": -1.0,
+    "no_speech_threshold": 0.6,
+    "return_timestamps": True,
+}
+
+pred_ids = model.generate(**inputs, **gen_kwargs)
+pred_text = processor.batch_decode(pred_ids, skip_special_tokens=True, decode_with_timestamps=False)
+
+print(pred_text)
+```
+
+</details>
+
+### Chunked Long-Form
+
+distil-large-v3 remains compatible with the Transformers chunked long-form algorithm. This algorithm should be used when 
+a single large audio file is being transcribed and the fastest possible inference is required. In such circumstances, 
+the chunked algorithm is up to 9x faster than OpenAI's sequential long-form implementation (see Table 7 of the 
+[Distil-Whisper paper](https://arxiv.org/pdf/2311.00430.pdf)).
+
+We can load the model and processor as before:
+
+```python
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+model_id = "distil-whisper/distil-large-v3"
+
+model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+)
+model.to(device)
+
+processor = AutoProcessor.from_pretrained(model_id)
+```
+
+To enable chunking, pass the `chunk_length_s` parameter to the `pipeline`. For distil-large-v3, a chunk length of 25-seconds
 is optimal. To activate batching, pass the argument `batch_size`:
 
 ```python
@@ -138,7 +317,7 @@ pipe = pipeline(
     tokenizer=processor.tokenizer,
     feature_extractor=processor.feature_extractor,
     max_new_tokens=128,
-    chunk_length_s=15,
+    chunk_length_s=25,
     batch_size=16,
     torch_dtype=torch_dtype,
     device=device,
@@ -146,7 +325,7 @@ pipe = pipeline(
 ```
 
 The argument `max_new_tokens` controls the maximum number of generated tokens *per-chunk*. In the typical speech setting,
-we have no more than 3 words spoken per-second. Therefore, for a 15-second input, we have at most 45 words (approx 60 tokens).
+we have no more than 3 words spoken per-second. Therefore, for a 30-second input, we have at most 90 words (approx 128 tokens).
 We set the maximum number of generated tokens per-chunk to 128 to truncate any possible hallucinations that occur at the 
 end of the segment. These tokens get removed at the chunk borders using the long-form chunking transcription algorithm, 
 so it is more efficient to truncate them directly during generation to avoid redundant generation steps in the decoder.
@@ -167,14 +346,6 @@ result = pipe(sample)
 print(result["text"])
 ```
 
-<!---
-**Tip:** The pipeline can also be used to transcribe an audio file from a remote URL, for example:
-
-```python
-result = pipe("https://huggingface.co/datasets/sanchit-gandhi/librispeech_long/resolve/main/audio.wav")
-```
---->
-
 For more information on how to customize the automatic speech recognition pipeline, please refer to the ASR pipeline [docs](https://huggingface.co/docs/transformers/v4.34.1/en/main_classes/pipelines#transformers.AutomaticSpeechRecognitionPipeline).
 
 ### Speculative Decoding
@@ -183,8 +354,8 @@ Distil-Whisper can be used as an assistant model to Whisper for [speculative dec
 Speculative decoding mathematically ensures the exact same outputs as Whisper are obtained while being 2 times faster. 
 This makes it the perfect drop-in replacement for existing Whisper pipelines, since the same outputs are guaranteed.
 
-For speculative decoding, we need to load both the teacher: [`openai/whisper-large-v2`](https://huggingface.co/openai/whisper-large-v2).
-As well as the assistant (*a.k.a* student) [`distil-whisper/distil-large-v2`](https://huggingface.co/distil-whisper/distil-large-v2).
+For speculative decoding, we need to load both the teacher: [`openai/whisper-large-v3`](https://huggingface.co/openai/whisper-large-v3).
+As well as the assistant (*a.k.a* student) [`distil-whisper/distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3).
 
 Let's start by loading the teacher model and processor. We do this in much the same way we loaded the Distil-Whisper 
 model in the previous examples:
@@ -196,7 +367,7 @@ import torch
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-model_id = "openai/whisper-large-v2"
+model_id = "openai/whisper-large-v3"
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
     model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
@@ -371,7 +542,7 @@ be general enough to distill Whisper for multilingual speech recognition, facili
 Whisper on their choice of language.
 
 ## 5. Acknowledgements
-* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
+* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v3) and [original codebase](https://github.com/openai/whisper)
 * Hugging Face 🤗 [Transformers](https://github.com/huggingface/transformers) for the model integration
 * Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) program for Cloud TPU v4s
 
