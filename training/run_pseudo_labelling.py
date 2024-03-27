@@ -243,13 +243,21 @@ class DataTrainingArguments:
     )
     decode_token_ids: bool = field(
         default=True,
-        metadata={"help": "Whether or not to decode the predicted token ids to text transcriptions."},
+        metadata={"help": "Deprecated. The predicted token ids should always be decoded to text transcriptions."},
     )
     private_dataset: bool = field(
         default=False,
         metadata={"help": "Whether or not to create a private dataset for the pseudo-labelled data."},
     )
 
+    def __post_init__(self):
+        if not self.decode_token_ids:
+            raise ValueError(
+                "The argument `--decode_token_ids` is deprecated. The token ids are now always decoded to "
+                "their corresponding text string. This is following a fix to the merges of the Whisper tokenizer"
+                "on the Hugging Face Hub: https://huggingface.co/openai/whisper-large-v2/discussions/100. "
+                "You should either omit the argument `--decode_token_ids`, or set it to True explicitly."
+            )
 
 def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.ndarray:
     """
@@ -301,7 +309,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         # dataloader returns a list of features which we convert to a dict
         input_features = {model_input_name: [feature[model_input_name] for feature in features]}
         label_features = {"input_ids": [feature["labels"] for feature in features]}
-        file_ids = {"input_ids": [feature["file_id"] for feature in features]}
+        file_ids = [feature["file_id"] for feature in features]
 
         # reformat list to dict and set to pytorch format
         batch = self.processor.feature_extractor.pad(
@@ -317,13 +325,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             return_tensors="pt",
         )
 
-        file_ids_batch = self.processor.tokenizer.pad(
-            file_ids,
-            max_length=self.max_target_length,
-            padding=self.target_padding,
-            return_tensors="pt",
-        )
-
         # replace padding with -100 to ignore correctly when computing the loss
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
 
@@ -333,7 +334,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             labels = labels[:, 1:]
 
         batch["labels"] = labels
-        batch["file_ids"] = file_ids_batch["input_ids"]
+        batch["file_ids"] = file_ids
 
         return batch
 
@@ -576,6 +577,7 @@ def main():
     normalizer = (
         BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
+    decoder_eot_token_id = tokenizer.eos_token_id
 
     if data_args.max_samples_per_split is not None:
         for split in data_splits:
@@ -597,7 +599,7 @@ def main():
         batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
 
         # record the id of the sample as token ids
-        batch["file_id"] = tokenizer(batch[id_column_name], add_special_tokens=False).input_ids
+        batch["file_id"] = batch[id_column_name]
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
@@ -663,7 +665,7 @@ def main():
         for idx in range(len(labels)):
             labels[idx][labels[idx] == -100] = tokenizer.pad_token_id
 
-        pred_str = tokenizer.batch_decode(preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps)
+        pred_str = tokenizer.batch_decode(preds, skip_special_tokens=False, decode_with_timestamps=return_timestamps)
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
         wer_ortho = 100 * metric.compute(predictions=pred_str, references=label_str)
@@ -682,6 +684,14 @@ def main():
         wer = 100 * metric.compute(predictions=norm_pred_str, references=norm_label_str)
 
         return {"wer": wer, "wer_ortho": wer_ortho}, pred_str, label_str, norm_pred_str, norm_label_str, file_ids
+
+    def filter_eot_tokens(preds):
+        for idx in range(len(preds)):
+            # remove the EOT tokens to get the 'true' token length
+            token_ids = [token for token in preds[idx] if token != decoder_eot_token_id]
+            token_ids = token_ids + [decoder_eot_token_id]
+            preds[idx] = token_ids
+        return preds
 
     # 12. Define Training Schedule
     per_device_eval_batch_size = int(training_args.per_device_eval_batch_size)
@@ -724,6 +734,7 @@ def main():
         eval_preds = []
         eval_labels = []
         eval_ids = []
+        pred_str = []
         eval_start = time.time()
 
         eval_loader = DataLoader(
@@ -753,17 +764,17 @@ def main():
             )
             eval_preds.extend(generated_ids.cpu().numpy())
             eval_labels.extend(labels.cpu().numpy())
-            file_ids = tokenizer.batch_decode(file_ids, skip_special_tokens=True)
             eval_ids.extend(file_ids)
 
             if step % training_args.logging_steps == 0 and step > 0:
                 batches.write(f"Saving transcriptions for split {split} step {step}")
                 accelerator.wait_for_everyone()
-                if data_args.decode_token_ids:
-                    eval_preds = tokenizer.batch_decode(
-                        eval_preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps
-                    )
-                csv_data = [[eval_ids[i], eval_preds[i]] for i in range(len(eval_preds))]
+                pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)):]
+                pred_ids = filter_eot_tokens(pred_ids)
+                pred_str.extend(
+                    tokenizer.batch_decode(pred_ids, skip_special_tokens=False,decode_with_timestamps=return_timestamps)
+                )
+                csv_data = [[eval_ids[i], pred_str[i]] for i in range(len(eval_preds))]
 
                 with open(output_csv, "w", encoding="UTF8", newline="") as f:
                     writer = csv.writer(f)
@@ -783,6 +794,7 @@ def main():
         # compute WER metric for eval sets
         wer_desc = ""
         if "validation" in split or "test" in split:
+            eval_preds = filter_eot_tokens(eval_preds)
             wer_metric, pred_str, label_str, norm_pred_str, norm_label_str, eval_ids = compute_metrics(
                 eval_preds, eval_labels, eval_ids
             )
@@ -802,11 +814,11 @@ def main():
                 norm_label_str,
                 prefix=split,
             )
-            if data_args.decode_token_ids:
-                eval_preds = pred_str
-        elif data_args.decode_token_ids:
-            eval_preds = tokenizer.batch_decode(
-                eval_preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps
+        else:
+            pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)):]
+            pred_ids = filter_eot_tokens(pred_ids)
+            pred_str.extend(
+                tokenizer.batch_decode(pred_ids, skip_special_tokens=False, decode_with_timestamps=return_timestamps)
             )
 
         batches.write(f"Saving final transcriptions for split {split}.")
@@ -829,7 +841,6 @@ def main():
         f"  Total eval batch size (w. parallel & distributed) = {training_args.per_device_eval_batch_size * accelerator.num_processes}"
     )
     logger.info(f"  Predict labels with timestamps = {return_timestamps}")
-    logger.info(f"  Decode labels to transcriptions = {data_args.decode_token_ids}")
     for split in data_splits:
         eval_step_with_save(split=split)
         accelerator.wait_for_everyone()
