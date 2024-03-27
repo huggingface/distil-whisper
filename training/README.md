@@ -267,7 +267,6 @@ accelerate launch run_distillation.py \
   --per_device_train_batch_size 32 \
   --per_device_eval_batch_size 32 \
   --dataloader_num_workers 8 \
-  --dataloader_prefetch_factor 2 \
   --preprocessing_num_workers 8 \
   --ddp_timeout 7200 \
   --dtype "bfloat16" \
@@ -279,7 +278,7 @@ accelerate launch run_distillation.py \
   --overwrite_output_dir \
   --predict_with_generate \
   --freeze_encoder \
-  --freeze_embeddings \
+  --freeze_embed_positions \
   --streaming False \
   --push_to_hub
 
@@ -308,7 +307,7 @@ There are a few noteworthy data arguments:
 
 As well as a few noteworthy model arguments that can be configured to give optimal training performance:
 1. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
-2. `freeze_embeddings`: whether to freeze the student model's decoder input and positional embeddings. Using the same input embeds representation as the teacher model, which is designed to handle context lengths up to 448 tokens, helps the student model retain its input id representation up to the full max input length. 
+2. `freeze_embed_positions`: whether to freeze the student model's decoder positional embeddings. Using the same embed positions as the teacher model, which is designed to handle context lengths up to 448 tokens, helps the student model retain its input id representation up to the full max input length. 
 3. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
 
 And finally, a few noteworthy training arguments:

@@ -341,9 +341,9 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
-    freeze_embeddings: Optional[bool] = field(
+    freeze_embed_positions: Optional[bool] = field(
         default=False,
-        metadata={"help": "Whether to freeze the decoder embedding tokens and positions."},
+        metadata={"help": "Whether to freeze the decoder embedding positions."},
     )
     temperature: Optional[float] = field(
         default=2.0, metadata={"help": "Temperature to anneal the logits when computing the softmax."}
@@ -984,14 +984,23 @@ def main():
     if training_args.gradient_checkpointing:
         student_model.gradient_checkpointing_enable()
 
+    def set_trainable_parameters(module, requires_grad=False):
+        for param in module.parameters():
+            param.requires_grad = requires_grad
+        module._requires_grad = requires_grad
+
     # freeze student encoder if necessary
     if training_args.freeze_encoder:
-        student_model.freeze_encoder()
+        set_trainable_parameters(student_model.model.encoder, requires_grad=False)
         student_model.model.encoder.gradient_checkpointing = False
 
-    if training_args.freeze_embeddings:
-        student_model.model.decoder.embed_tokens.requires_grad_(False)
-        student_model.model.decoder.embed_positions.requires_grad_(False)
+    if training_args.freeze_embed_positions:
+        # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
+        set_trainable_parameters(student_model.model.decoder.embed_positions, requires_grad=False)
+        if student_model.model.decoder.gradient_checkpointing:
+            logger.info(
+                "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
+            )
 
     # if share_hidden_states:
     # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
@@ -1297,9 +1306,13 @@ def main():
     elif training_args.max_steps > 0:
         logger.info("max_steps is given, it will override any value given in num_train_epochs")
         total_train_steps = int(training_args.max_steps)
-        # Setting a very large number of epochs so we go as many times as necessary over the iterator.
-        num_epochs = sys.maxsize
-        steps_per_epoch = total_train_steps
+        if not data_args.streaming:
+            steps_per_epoch = len(vectorized_datasets["train"]) // (train_batch_size * gradient_accumulation_steps)
+            num_epochs = int(np.ceil(total_train_steps / steps_per_epoch))
+        else:
+            # Setting a very large number of epochs so we go as many times as necessary over the iterator.
+            num_epochs = sys.maxsize
+            steps_per_epoch = total_train_steps
     else:
         raise ValueError("max_steps must be specified when training with a streaming (iterable) dataset")
 
@@ -1458,6 +1471,8 @@ def main():
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {total_train_steps * train_batch_size * gradient_accumulation_steps}")
+    if not data_args.streaming:
+        logger.info(f"  Num epochs = {num_epochs}")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_train_batch_size}")
     logger.info("  Gradient accumulation steps =" f" {gradient_accumulation_steps}")
     logger.info(
