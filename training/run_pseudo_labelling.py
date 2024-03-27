@@ -24,6 +24,7 @@ import os
 import string
 import sys
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -161,7 +162,7 @@ class ModelArguments:
                     "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
                     "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
                 )
-            logger.warning(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`.")
+            warnings.warn(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`.")
         elif self.attn_type is not None and self.attn_implementation is not None:
             raise ValueError("`--attn_type` and `--attn_implementation` are both specified. Only the argument `--attn_implementation`.")
 
@@ -192,6 +193,10 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
+    preprocessing_batch_size: Optional[int] = field(
+        default=500,
+        metadata={"help": "The batch size to use for the dataset pre-processing."},
+    )
     audio_column_name: str = field(
         default="audio",
         metadata={"help": "The name of the dataset column containing the audio data. Defaults to 'audio'"},
@@ -204,9 +209,21 @@ class DataTrainingArguments:
         default="id",
         metadata={"help": "The name of the dataset column containing the id data. Defaults to 'id'"},
     )
+    speaker_id_column_name: str = field(
+        default=None,
+        metadata={"help": "The name of the dataset column containing the speaker id data. Defaults to None."},
+    )
+    max_duration_in_seconds: float = field(
+        default=30.0,
+        metadata={"help": "Filter audio files that are longer than `max_duration_in_seconds` seconds"},
+    )
     max_label_length: int = field(
         default=256,
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
+    )
+    concatenate_audio: bool = field(
+        default=True,
+        metadata={"help": "Whether or not to concatenate the audio samples to `max_duration_in_seconds`."},
     )
     preprocessing_only: bool = field(
         default=False,
@@ -561,6 +578,7 @@ def main():
 
     return_timestamps = data_args.return_timestamps
     if hasattr(model.generation_config, "is_multilingual") and model.generation_config.is_multilingual:
+        is_multilingual = True
         # We need to set the language and task ids for multilingual checkpoints
         tokenizer.set_prefix_tokens(
             language=data_args.language, task=data_args.task, predict_timestamps=return_timestamps
@@ -570,6 +588,8 @@ def main():
             "Setting language token for an English-only checkpoint is not permitted. The language argument should "
             "only be set for multilingual checkpoints."
         )
+    else:
+        is_multilingual = False
 
     # 6. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
     # so we just need to set the correct target sampling rate.
@@ -580,18 +600,27 @@ def main():
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
+    max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     max_label_length = (
         data_args.max_label_length if data_args.max_label_length is not None else model.config.max_length
     )
     audio_column_name = data_args.audio_column_name
+    sampling_rate = feature_extractor.sampling_rate
+
+    preprocessing_batch_size = data_args.preprocessing_batch_size
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
+
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     id_column_name = data_args.id_column_name
+    speaker_id_column_name = data_args.speaker_id_column_name
     normalizer = (
         BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
+
+    timestamp_position = 3 if is_multilingual else 1
+    decoder_prev_token_id = tokenizer.convert_tokens_to_ids("<|startofprev|>")
     decoder_eot_token_id = tokenizer.eos_token_id
 
     if data_args.max_samples_per_split is not None:
@@ -601,6 +630,95 @@ def main():
                 if data_args.streaming
                 else raw_datasets[split].select(range(data_args.max_samples_per_split))
             )
+
+    if speaker_id_column_name is not None:
+        raw_datasets = raw_datasets.sort(speaker_id_column_name)
+
+    def concatenate_dataset(batch):
+        audio = [sample["array"] for sample in batch[audio_column_name]]
+        input_lengths = [len(sample) for sample in audio]
+
+        text = batch[text_column_name]
+        speaker_id = batch[speaker_id_column_name] if speaker_id_column_name else len(text) * [None]
+
+        concatenated_audio = []
+        concatenated_text = []
+        concatenated_speaker = []
+        condition_on_prev = []
+        audio_sample = audio[0]
+        text_sample = text[0]
+
+        for idx in range(1, len(audio)):
+            prev_speaker = speaker_id[idx - 1]
+            speaker = speaker_id[idx]
+
+            if len(audio_sample) + input_lengths[idx] < max_input_length:
+                if speaker == prev_speaker:
+                    # we have no information about whether the segments follow on sequentially
+                    # so we just ensure the same speaker as we concatenate across files
+                    audio_sample = np.append(audio_sample, audio[idx])
+                    # extra spaces in the text transcription don't matter, since we only use it for the WER computation
+                    text_sample += " " + text[idx]
+                else:
+                    # speakers do not follow sequentially, save the audio and start looping again
+                    concatenated_audio.append(audio_sample)
+                    concatenated_text.append(text_sample)
+                    concatenated_speaker.append(speaker)
+                    condition_on_prev.append(0)
+                    audio_sample = audio[idx]
+                    text_sample = text[idx]
+
+            else:
+                # concatenated audio exceeds max length, save the audio and start looping again
+                concatenated_audio.append(audio_sample)
+                concatenated_text.append(text_sample)
+                concatenated_speaker.append(speaker)
+                condition_on_prev.append(1)
+                audio_sample = audio[idx]
+                text_sample = text[idx]
+
+        batch[audio_column_name] = [{"array": array, "sampling_rate": sampling_rate} for array in concatenated_audio]
+        batch[text_column_name] = concatenated_text
+        batch[id_column_name] = concatenated_speaker
+        batch["condition_on_prev"] = condition_on_prev
+
+        return batch
+
+    raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
+    if data_args.concatenate_audio and not data_args.streaming:
+        raw_datasets = raw_datasets.map(
+            concatenate_dataset,
+            batched=True,
+            batch_size=preprocessing_batch_size,
+            num_proc=num_workers,
+            remove_columns=set(raw_datasets_features) - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
+            desc="Concatenating dataset...",
+        )
+
+        raw_datasets = raw_datasets.cast_column(audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate))
+        pretty_name = data_args.dataset_name.split("/")[-1]
+
+        def postprocess_ids(speaker_ids, indices):
+            speaker_ids_formatted = []
+            for speaker, idx in zip(speaker_ids, indices):
+                formatted_idx = f"{pretty_name}-{speaker}-{idx}" if speaker is not None else f"{pretty_name}-{idx}"
+                speaker_ids_formatted.append(formatted_idx)
+            return {id_column_name: speaker_ids_formatted}
+
+        raw_datasets = raw_datasets.map(
+            postprocess_ids,
+            input_columns=[id_column_name],
+            with_indices=True,
+            desc="Setting sample idxs...",
+            batched=True,
+            batch_size=preprocessing_batch_size,
+            num_proc=num_workers,
+        )
+    else:
+        raise ValueError(
+            "Streaming mode is not yet compatible with concatenating audios to `max_duration_in_seconds`."
+            "Either set `--streaming=False` and download the audios locally, or open an issue on the Distil-Whisper repo to request this feature."
+        )
 
     def prepare_dataset(batch):
         # process audio
@@ -683,7 +801,6 @@ def main():
         pred_str = tokenizer.batch_decode(preds, skip_special_tokens=False, decode_with_timestamps=return_timestamps)
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
-        wer_ortho = 100 * metric.compute(predictions=pred_str, references=label_str)
 
         # normalize everything and re-compute the WER
         norm_pred_str = [normalizer(pred) for pred in pred_str]
@@ -698,7 +815,7 @@ def main():
 
         wer = 100 * metric.compute(predictions=norm_pred_str, references=norm_label_str)
 
-        return {"wer": wer, "wer_ortho": wer_ortho}, pred_str, label_str, norm_pred_str, norm_label_str, file_ids
+        return {"wer": wer}, pred_str, label_str, norm_pred_str, norm_label_str, file_ids
 
     def filter_eot_tokens(preds):
         for idx in range(len(preds)):
@@ -740,6 +857,7 @@ def main():
                 "task": data_args.task,
             }
         )
+    model.generation_config.forced_decoder_ids = None
 
     # 15. Prepare everything with accelerate
     model = accelerator.prepare(model)
@@ -847,8 +965,30 @@ def main():
         # Print metrics
         logger.info(wer_desc)
 
-        if not data_args.streaming:
-            raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", eval_preds)
+        if not data_args.streaming and accelerator.is_main_process:
+            raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", pred_str)
+            raw_datasets[split] = raw_datasets[split].add_column("eval_preds", eval_preds)
+
+            def add_concatenated_text(eval_preds, condition_on_prev):
+                concatenated_prev = [None]
+                for token_ids, condition in zip(eval_preds[:-1], condition_on_prev[1:]):
+                    if condition is False:
+                        concatenated_prev.append(None)
+                    else:
+                        prompt_ids = [token for token in token_ids if token != decoder_eot_token_id]
+                        prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:]
+                        concatenated_prev.append(prompt_ids)
+                return {"condition_on_prev": concatenated_prev}
+
+            raw_datasets[split] = raw_datasets[split].map(
+                add_concatenated_text,
+                input_columns=["eval_preds", "condition_on_prev"],
+                remove_columns=["eval_preds"],
+                desc="Setting condition on prev...",
+                batched=True,
+                batch_size=preprocessing_batch_size,
+                num_proc=num_workers,
+            )
 
     logger.info("***** Running Labelling *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
