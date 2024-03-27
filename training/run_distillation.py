@@ -341,6 +341,10 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
+    freeze_embeddings: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to freeze the decoder embedding tokens and positions."},
+    )
     temperature: Optional[float] = field(
         default=2.0, metadata={"help": "Temperature to anneal the logits when computing the softmax."}
     )
@@ -516,13 +520,13 @@ def convert_dataset_str_to_list(
     """
     if isinstance(dataset_names, str):
         dataset_names = dataset_names.split("+")
-        dataset_config_names = dataset_config_names.split("+")
+        dataset_config_names = dataset_config_names.split("+") if dataset_config_names is not None else None
         splits = splits.split("+") if splits is not None else None
         text_column_names = text_column_names.split("+") if text_column_names is not None else None
         dataset_samples = dataset_samples.split("+") if dataset_samples is not None else None
 
     # basic checks to ensure we've got the right number of datasets/configs/splits/columns/probs
-    if len(dataset_names) != len(dataset_config_names):
+    if dataset_config_names is not None and len(dataset_names) != len(dataset_config_names):
         raise ValueError(
             f"Ensure one config is passed for each dataset, got {len(dataset_names)} datasets and"
             f" {len(dataset_config_names)} configs."
@@ -549,6 +553,9 @@ def convert_dataset_str_to_list(
     else:
         dataset_samples = [None] * len(dataset_names)
 
+    dataset_config_names = (
+        dataset_config_names if dataset_config_names is not None else ["default" for _ in range(len(dataset_names))]
+    )
     text_column_names = (
         text_column_names if text_column_names is not None else ["text" for _ in range(len(dataset_names))]
     )
@@ -981,6 +988,10 @@ def main():
     if training_args.freeze_encoder:
         student_model.freeze_encoder()
         student_model.model.encoder.gradient_checkpointing = False
+
+    if training_args.freeze_embeddings:
+        student_model.model.decoder.embed_tokens.requires_grad_(False)
+        student_model.model.decoder.embed_positions.requires_grad_(False)
 
     # if share_hidden_states:
     # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
