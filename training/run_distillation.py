@@ -1071,7 +1071,10 @@ def main():
     # 10.3: filter training data based on WER threshold -> this is KEY to good distillation performance
     def is_wer_in_range(ground_truth, whisper_transcript):
         norm_ground_truth = normalizer(ground_truth)
-        if len(norm_ground_truth) > 0 and whisper_transcript is not None:
+        if whisper_transcript is not None and whisper_transcript.upper() == whisper_transcript:
+            # filter entirely upper-case transcriptions: these are erroneous generations from large-v3
+            return False
+        elif len(norm_ground_truth) > 0 and whisper_transcript is not None:
             norm_whisper_transcript = normalizer(whisper_transcript)
             wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
             return wer < wer_threshold
