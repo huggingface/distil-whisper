@@ -630,6 +630,10 @@ def load_multiple_datasets(
                     "labels by setting `--use_pseudo_labels=False` and defining the appropriate `--text_column_name`."
                 )
             columns_to_keep.add("whisper_transcript")
+
+        if "condition_on_prev" in dataset_features:
+            columns_to_keep.add("condition_on_prev")
+
         dataset_features = dataset.features.keys()
         dataset = dataset.remove_columns(set(dataset_features - columns_to_keep))
         all_datasets.append(dataset)
@@ -1037,6 +1041,7 @@ def main():
 
     decoder_start_token_id = student_model.config.decoder_start_token_id  # <|startoftranscript|>
     decoder_prev_token_id = tokenizer.all_special_ids[-3]  # <|startofprev|>
+    prompt_cutoff_length = max_label_length // 2
 
     language = data_args.language
     task = data_args.task
@@ -1111,10 +1116,11 @@ def main():
 
         # process text targets - for training these are the Whisper-generated pseudo-labels
         input_str_batched = batch[train_text_column_name]
+        condition_on_prev_batched = batch.get("condition_on_prev", len(input_str_batched) * [None])
 
         all_token_ids = []
         all_token_ids_unprompted = []
-        for input_str in input_str_batched:
+        for prev_ids, input_str in zip(condition_on_prev_batched, input_str_batched):
             token_ids = tokenizer(input_str, add_special_tokens=not use_pseudo_labels).input_ids
 
             # check whether we have timestamps in the PLs and filter if required
@@ -1130,16 +1136,30 @@ def main():
             all_token_ids_unprompted.append(token_ids)
             # check whether to condition on previous text - we do this with probability condition_on_prev_probability
             condition_on_prev = bool(np.random.binomial(1, condition_on_prev_probability))
-            if condition_on_prev and len(all_token_ids_unprompted) > 1:
+            if not condition_on_prev:
+                prev_ids = None
+            elif "condition_on_prev" not in batch and len(all_token_ids_unprompted) > 1:
                 # prompt ids are the penultimate token ids in the batch
-                prompt_ids = all_token_ids_unprompted[-2]
-                # strip timestamp tokens from prompt
-                prompt_ids = [token for token in prompt_ids if token < timestamp_begin]
-                if len(prompt_ids) > 0:
-                    # remove the standard task tokens and add the special <|startofprev|> token
-                    prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:-1]
-                if len(prompt_ids + token_ids) < max_label_length:
-                    token_ids = prompt_ids + token_ids
+                prev_ids = all_token_ids_unprompted[-2]
+
+            if prev_ids is not None:
+                if has_timestamps and not predict_timestamps:
+                    # filter timestamp ids from prompt when not predicting timestamps
+                    prev_ids = [token for token in prev_ids if token < timestamp_begin]
+
+                # check that the length of the prompt does not exceed more than half the max label length (224)
+                if len(prev_ids) > prompt_cutoff_length:
+                    prev_ids = prev_ids[-prompt_cutoff_length + 1 :]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+
+                # and that the total length of the labels does not exceed the max label length (448)
+                if len(prev_ids + token_ids) > max_label_length:
+                    trim_length = len(prev_ids + token_ids) - max_label_length + 1
+                    prev_ids = prev_ids[trim_length:]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+
+                token_ids = prev_ids + token_ids
+
             all_token_ids.append(token_ids)
 
         batch["labels"] = all_token_ids
