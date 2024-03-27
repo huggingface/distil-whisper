@@ -100,6 +100,7 @@ def init_student_model_from_teacher(
     )
     processor = WhisperProcessor.from_pretrained(teacher_checkpoint)
     generation_config = GenerationConfig.from_pretrained(teacher_checkpoint)
+    generation_config.forced_decoder_ids = None
 
     teacher_config = teacher_model.config
     teacher_encoder_layers = teacher_config.encoder_layers

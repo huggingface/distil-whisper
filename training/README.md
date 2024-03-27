@@ -96,47 +96,59 @@ with [🤗 Datasets](https://github.com/huggingface/datasets) *streaming mode*, 
 datasets with **no disk space requirements**. For more information on streaming mode, the reader is referred to the 
 blog post: [A Complete Guide to Audio Datasets](https://huggingface.co/blog/audio-datasets#streaming-mode-the-silver-bullet).
 
-The following script demonstrates how to pseudo-label the Hindi split of the Common Voice 13 dataset with greedy sampling:
+> As of the latest Distil-Whisper release, [`distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3), this
+pseudo-labelling script also performs the added operation of concatenating (or packing) the audio inputs to 30-seconds. 
+Not only does this lead to a WER improvement when using sequential long-form decoding algorithm, but concatenating audios 
+to 30-seconds also improves the throughput during training, since the amount of zero-padding on the audio inputs is minimised.
+
+The following script demonstrates how to pseudo-label the Hindi split of the Common Voice 16.1 dataset with greedy sampling:
 
 ```bash
 #!/usr/bin/env bash
 
 accelerate launch run_pseudo_labelling.py \
-  --model_name_or_path "openai/whisper-large-v2" \
-  --dataset_name "mozilla-foundation/common_voice_13_0" \
+  --model_name_or_path "openai/whisper-large-v3" \
+  --dataset_name "mozilla-foundation/common_voice_16_1" \
   --dataset_config_name "hi" \
   --dataset_split_name "train+validation+test" \
   --text_column_name "sentence" \
   --id_column_name "path" \
-  --output_dir "./common_voice_13_0_hi_pseudo_labelled" \
+  --output_dir "./common_voice_16_1_hi_pseudo_labelled" \
   --wandb_project "distil-whisper-labelling" \
   --per_device_eval_batch_size 64 \
   --dtype "bfloat16" \
-  --dataloader_num_workers 16 \
-  --preprocessing_num_workers 16 \
+  --attn_implementation "sdpa" \
   --logging_steps 500 \
-  --max_label_length 128 \
+  --max_label_length 256 \
+  --concatenate_audio \
+  --preprocessing_batch_size 500 \
+  --preprocessing_num_workers 8 \
+  --dataloader_num_workers 8 \
   --report_to "wandb" \
   --language "hi" \
   --task "transcribe" \
   --return_timestamps \
-  --attn_type "flash_attn" \
   --streaming False \
   --generation_num_beams 1 \
-  --decode_token_ids False \
   --push_to_hub
 ```
 
-On an 80 GB A100 GPU, the following script takes approximately 20 minutes to transcribe a total of 20 hours of audio data.
-The WER of the pre-trained model is 23.8% on the test split. 
+On an 80 GB A100 GPU, the following script takes approximately 5 minutes to concatenate and pre-process the 20 hours of 
+audio data, and a further 10 minutes to transcribe the pseudo-labels. The pseudo-labelled dataset corresponding to this
+script is available on the Hugging Face Hub under [sanchit-gandhi/common_voice_16_1_hi_pseudo_labelled](https://huggingface.co/datasets/sanchit-gandhi/common_voice_16_1_hi_pseudo_labelled).
+The WER of the pre-trained Whisper large-v3 model is 17.2% on the test split. We will compare the performance of our distilled model against this number.
 
-There are a few noteworthy arguments that can be configured:
+There are two noteworthy arguments that configure the dataset concatenation (or packing) process:
+1. `concatenate_audio`: whether or not to concatenate (or pack) the audios to 30-second chunks. The latest Distil-Whisper model, [`distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3#differences-with-distil-large-v2), highlights the WER improvements obtained using the sequential long-form decoding algorithm when concatenated audios are used. Concatenating audios to 30-seconds also improves the throughput during training, since the amount of zero-padding on the audio inputs is minimised. Hence, it is highly recommended to set `--concatenate_audio=True`.
+2. `preprocessing_batch_size`: the batch size to use when concatenating (or packing) the audios. Using a larger batch size results in a greater portion of audio samples being packed to 30-seconds, at the expense of higher memory consumption. If you exceed your system's RAM when performing the concatenation operation, reduce the `preprocessing_batch_size` by a factor of 2 to 250 or even 125.
+3. `preprocessing_num_workers`: the number of multiprocessing workers to use when concatenating the audios. Using more workers will result in faster pre-processing, at the expense of higher memory consumption. Ensure you do not exceed the maximum number of CPUs on your device.
+
+In addition, the following arguments configure the inference of the Whisper model:
 1. `language`: explicitly setting the language token during inference substantially improves the generation performance of the Whisper model, since the model is forced always to predict in the given language. We recommend you set the language to the language you wish to distil the Whisper model on. The only exception is when distilling an English-only model (i.e. where the model id is appended with an `.en`, e.g. `small.en`), the language argument should be set to None, since there is no language token used during training/inference.
 2. `return_timestamps`: whether or not to predict timestamps in the pseudo-labels. Timestamp prediction is required should you want your distilled model to be able to predict timestamps at inference time (e.g. for the original OpenAI long-form transcription algorithm). However, the pseudo-labels are marginally less accurate than not using timestamps. We recommend pseudo-labelling **with** timestamps to ensure the distilled model is as general as possible.
-3. `attn_type`: which attention implementation to use for inference. Set to `flash_attn` for [PyTorch SDPA](https://huggingface.co/docs/transformers/v4.35.2/en/perf_infer_gpu_one#bettertransformer), or `flash_attn_2` if your hardware supports Flash Attention 2 and you have the [package installed](https://github.com/Dao-AILab/flash-attention).
+3. `attn_implementation`: which attention implementation to use for inference. Set to `sdpa` for [PyTorch SDPA](https://huggingface.co/docs/transformers/v4.35.2/en/perf_infer_gpu_one#bettertransformer), or `flash_attn_2` if your hardware supports Flash Attention 2 and you have the [package installed](https://github.com/Dao-AILab/flash-attention).
 4. `streaming`: whether or not to use Datasets' streaming mode. If enabled, the audio data will be streamed from the Hugging Face Hub with no disk space requirements. However, the user is then responsible for adding the pseudo-labels to the dataset script in a follow-up step (see [Using Streaming Mode](#TODO)). If set to `False`, the audio data will be downloaded and pre-processed offline. At the end of pseudo-labelling, the pseudo-labels will be automatically appended to the original dataset, meaning the dataset is ready to be used for the subsequent training step without any additional steps.
 5. `generation_num_beams`: how many beams to use while decoding. In practice, we found the distilled model to perform comparably when the data was pseudo-labelled with `generation_num_beams=1` (greedy) or `generation_num_beams>1` (beam). This is likely because the WER filter compensates for the lower quality pseudo-labels obtained using greedy search. However, using `generation_num_beams=1` gives substantially faster inference time for the pseudo-labelling step, and so we recommend this configuration.
-6. `decode_token_ids`: whether or not to decode the generated token ids to text transcriptions. If set to `False`, the token ids generated by the pre-trained Whisper model will be used as the targets during training. If set to `True`, the token ids will first be converted to their corresponding text transcriptions, and then re-tokenised to give the token id targets during training. The Whisper tokenizer does not preserve the same token ids across encoding/decoding steps, that is `encode(decode(token_ids)) != token_ids`. This means that decoding the token ids to text transcriptions changes the distribution of the token ids used as the targets during training. In our experiments, we found that setting `decode_token_ids=True` resulting in better downstream performance of the distilled model, but aligned worse with the original teacher model for speculative decoding. This is likely due to a ['label smoothing'](https://arxiv.org/abs/1906.02629) effect from changing the distribution of the token ids. Should your goal be training a fast assistant model for speculative decoding, we recommend you set this argument to `False` as we have done above. If your goal is a fast standalone model, you can try setting this to `True` as we did for the original Distil-Whisper models.
 
 Should you have your own audio dataset, you can first [convert it](https://huggingface.co/docs/datasets/audio_dataset) to 
 Hugging Face Datasets format and push it to the Hugging Face Hub. You can then pseudo-label it using the script above, 
@@ -148,7 +160,7 @@ the three most popular multilingual datasets in the table below. For more detail
 | Dataset                                                                                       | Languages | Domain                                | Speaking Style | License   | Text Column  | ID Column    |
 |-----------------------------------------------------------------------------------------------|-----------|---------------------------------------|----------------|-----------|--------------|--------------|
 | [Multilingual LibriSpeech](https://huggingface.co/datasets/facebook/multilingual_librispeech) | 6         | Audiobooks                            | Narrated       | CC-BY-4.0 | `"sentence"` | `"path"`     |
-| [Common Voice 13](https://huggingface.co/datasets/mozilla-foundation/common_voice_13_0)       | 108       | Wikipedia text & crowd-sourced speech | Narrated       | CC0-1.0   | `"raw_text"` | `"audio_id"` |
+| [Common Voice 16](https://huggingface.co/datasets/mozilla-foundation/common_voice_16_1)       | 120       | Wikipedia text & crowd-sourced speech | Narrated       | CC0-1.0   | `"raw_text"` | `"audio_id"` |
 | [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli)                               | 15        | European Parliament recordings        | Spontaneous    | CC0       | `"text"`     | `"id"`       |
 
 To achieve *robustness* to different distributions of audio data, it is recommended to train on multiple datasets where possible.
@@ -168,32 +180,32 @@ First, we need to create a model repository on the Hugging Face Hub. This reposi
 to reproduce the training run, alongside model weights, training logs and a README.md card. You can either create a model 
 repository directly on the Hugging Face Hub using the link: https://huggingface.co/new. Or, via the CLI, as we'll show here.
 
-Let's pick a name for our distilled model: `distil-whisper-large-v2-hi`. We can run the following command to create a repository under this name:
+Let's pick a name for our distilled model: `distil-whisper-large-v3-hi`. We can run the following command to create a repository under this name:
 
 ```bash
-huggingface-cli repo create distil-whisper-large-v2-hi
+huggingface-cli repo create distil-whisper-large-v3-hi
 ```
 
-We can now see the model on the Hub, e.g. under https://huggingface.co/sanchit-gandhi/distil-whisper-large-v2-hi
+We can now see the model on the Hub, e.g. under https://huggingface.co/sanchit-gandhi/distil-whisper-large-v3-hi
 
 Let's clone the repository so that we can place our training script and model weights inside:
 
 ```bash
 git lfs install
-git clone https://huggingface.co/sanchit-gandhi/distil-whisper-large-v2-hi
+git clone https://huggingface.co/sanchit-gandhi/distil-whisper-large-v3-hi
 ```
 
 Be sure to change the repo address to `https://huggingface.co/<your-user-name>/<your-repo-name>`
 
 We can now copy the relevant training scrips to the repository:
 ```bash
-cd distil-whisper-large-v2-hi
+cd distil-whisper-large-v3-hi
 
 cp ../distil-whisper/training/create_student_model.py .
 cp ../distil-whisper/training/run_distillation.py .
 ```
 
-The following command demonstrates how to initialise a student model from the Whisper [large-v2](https://huggingface.co/openai/whisper-large-v2) 
+The following command demonstrates how to initialise a student model from the Whisper [large-v3](https://huggingface.co/openai/whisper-large-v3) 
 checkpoint, with all 32 encoder layer and 2 decoder layers. The 2 student decoder layers are copied from teacher layers 
 1 and 32 respectively, as the maximally spaced layers:
 
@@ -201,13 +213,13 @@ checkpoint, with all 32 encoder layer and 2 decoder layers. The 2 student decode
 #!/usr/bin/env bash
 
 python create_student_model.py \
-  --teacher_checkpoint "openai/whisper-large-v2" \
+  --teacher_checkpoint "openai/whisper-large-v3" \
   --encoder_layers 32 \
   --decoder_layers 2 \
-  --save_dir "./distil-large-v2-init"
+  --save_dir "./distil-large-v3-init"
 ```
 
-The initialised model will be saved to the sub-directory `distil-large-v2-init` in our model repository. 
+The initialised model will be saved to the sub-directory `distil-large-v3-init` in our model repository. 
 
 ## 3. Training
 
@@ -218,7 +230,7 @@ KL-divergence loss terms.
 
 The following command takes the Common Voice dataset that was pseudo-labelled in the first stage and trains the 
 2-layer decoder model intialised in the previous step. We pass the local path to the pseudo-labelled Common Voice dataset
-(`../common_voice_13_0_hi_pseudo_labelled`), which you can change to the path where your local pseudo-labelled dataset is 
+(`../common_voice_16_1_hi_pseudo_labelled`), which you can change to the path where your local pseudo-labelled dataset is 
 saved.
 
 In this example, we will combine the train and validation splits to give our training set, and evaluate on the test split 
@@ -232,15 +244,13 @@ to any number of training datasets.
 #!/usr/bin/env bash
 
 accelerate launch run_distillation.py \
-  --model_name_or_path "./distil-large-v2-init" \
-  --teacher_model_name_or_path "openai/whisper-large-v2" \
-  --train_dataset_name "../common_voice_13_0_hi_pseudo_labelled+../common_voice_13_0_hi_pseudo_labelled" \
-  --train_dataset_config_name "hi+hi" \
+  --model_name_or_path "./distil-large-v3-init" \
+  --teacher_model_name_or_path "openai/whisper-large-v3" \
+  --train_dataset_name "./common_voice_16_1_hi_pseudo_labelled+./common_voice_16_1_hi_pseudo_labelled" \
   --train_split_name "train+validation" \
   --text_column_name "sentence+sentence" \
-  --train_dataset_samples "10+5" \
-  --eval_dataset_name "../common_voice_13_0_hi_pseudo_labelled" \
-  --eval_dataset_config_name "hi" \
+  --train_dataset_samples "7+4" \
+  --eval_dataset_name "./common_voice_16_1_hi_pseudo_labelled" \
   --eval_split_name "test" \
   --eval_text_column_name "sentence" \
   --eval_steps 1000 \
@@ -248,16 +258,20 @@ accelerate launch run_distillation.py \
   --warmup_steps 50 \
   --learning_rate 0.0001 \
   --lr_scheduler_type "constant_with_warmup" \
+  --timestamp_probability 0.2 \
+  --condition_on_prev_probability 0.2 \
   --logging_steps 25 \
   --save_total_limit 1 \
   --max_steps 5000 \
-  --wer_threshold 10 \
-  --per_device_train_batch_size 64 \
-  --per_device_eval_batch_size 64 \
-  --dataloader_num_workers 16 \
-  --preprocessing_num_workers 16 \
+  --wer_threshold 20 \
+  --per_device_train_batch_size 32 \
+  --per_device_eval_batch_size 32 \
+  --dataloader_num_workers 8 \
+  --dataloader_prefetch_factor 2 \
+  --preprocessing_num_workers 8 \
   --ddp_timeout 7200 \
   --dtype "bfloat16" \
+  --attn_implementation "sdpa" \
   --output_dir "./" \
   --do_train \
   --do_eval \
@@ -265,6 +279,7 @@ accelerate launch run_distillation.py \
   --overwrite_output_dir \
   --predict_with_generate \
   --freeze_encoder \
+  --freeze_embeddings \
   --streaming False \
   --push_to_hub
 
@@ -282,17 +297,23 @@ is trivial: simply run `accelerate config` and select the multi-GPU option, spec
 above script can then be run using DDP with no code changes. 
 
 Training logs will be reported to TensorBoard and WandB, provided the relevant packages are available. An example of a 
-saved checkpoint pushed to the Hugging Face Hub can be found here: [sanchit-gandhi/distil-whisper-large-v2-hi](https://huggingface.co/sanchit-gandhi/distil-whisper-large-v2-hi).
+saved checkpoint pushed to the Hugging Face Hub can be found here: [sanchit-gandhi/distil-whisper-large-v3-hi](https://huggingface.co/sanchit-gandhi/distil-whisper-large-v3-hi).
 
-There are a few noteworthy arguments that can be configured to give optimal training performance:
+There are a few noteworthy data arguments:
 1. `train_dataset_samples`: defines the number of training samples in each dataset. Used to calculate the sampling probabilities in the dataloader. A good starting point is setting the samples to the number of hours of audio data in each split. A more refined strategy is setting it to the number of training samples in each split, however this might require downloading the dataset offline to compute these statistics.
-2. `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong.
-3. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
-4. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
-5. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model.
-6. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
-7. `timestamp_probability`: the per-sample probability for retaining timestamp tokens in the labels (should they contain them). Retaining some portion of timestamp tokens in the training data is required to ensure the distilled model can predict timestamps at inference time. In our experiments, we found that training on timestamps with high-probability hurts the distilled model's transcription performance. Thus, we recommend setting this to a value below 0.5. Typically, a value of 0.2 works well, giving good transcription and timestamp performance.
-8. `condition_on_prev_probability`: the per-sample probability for conditioning on previous labels. Conditioning on previous tokens is required to ensure the distilled model can be used with the "sequential" long-form transcription algorithm at inference time. We did not experiment with this parameter, but found a value of 0.1 to provide adequate performance. OpenAI pre-trained Whisper on with a 50% probability for conditioning on previous tokens. Thus, you might wish to try higher values.
+2. `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong. In our English distillation experiments, we found a WER threshold of 10% provides the optimal trade-off between ensuring high-quality transcriptions, and not filtering unnecessary amounts of training data. For multilingual distillation, the threshold should be set in accordance with the WER achieved by the pre-trained model on the test set.
+3. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
+4. `timestamp_probability`: the per-sample probability for retaining timestamp tokens in the labels (should they contain them). Retaining some portion of timestamp tokens in the training data is required to ensure the distilled model can predict timestamps at inference time. In our experiments, we found that training on timestamps with high-probability hurts the distilled model's transcription performance. Thus, we recommend setting this to a value below 0.5. Typically, a value of 0.2 works well, giving good transcription and timestamp performance.
+5. `condition_on_prev_probability`: the per-sample probability for conditioning on previous labels. Conditioning on previous tokens is required to ensure the distilled model can be used with the "sequential" long-form transcription algorithm at inference time. We did not experiment with this parameter, but found values around 0.2 to provide adequate performance. OpenAI pre-trained Whisper on with a 50% probability for conditioning on previous tokens. Thus, you might wish to try higher values.
+
+As well as a few noteworthy model arguments that can be configured to give optimal training performance:
+1. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
+2. `freeze_embeddings`: whether to freeze the student model's decoder input and positional embeddings. Using the same input embeds representation as the teacher model, which is designed to handle context lengths up to 448 tokens, helps the student model retain its input id representation up to the full max input length. 
+3. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
+
+And finally, a few noteworthy training arguments:
+1. `max_steps`: defines the total number of optimisation steps (forward + backward pass) during training. To reach convergence, you should use a dataset of at least 1k hours and train for a minimum of 50k steps.
+2. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model.
 
 TODO:
 - [ ] Template for model cards
@@ -317,18 +338,18 @@ bypass the need to download the data offline:
 
 accelerate launch run_short_form_eval.py \
   --model_name_or_path "./" \
-  --dataset_name "../common_voice_13_0_hi_pseudo_labelled+google/fleurs" \
+  --dataset_name "../common_voice_16_1_hi_pseudo_labelled+google/fleurs" \
   --dataset_config_name "hi+hi_in" \
   --dataset_split_name "test+test" \
   --text_column_name "sentence+transcription" \
   --output_dir "./" \
   --per_device_eval_batch_size 64 \
   --dtype "bfloat16" \
-  --dataloader_num_workers 16 \
+  --dataloader_num_workers 8 \
   --report_to "wandb" \
   --generation_max_length 128 \
   --language "hi" \
-  --attn_type "flash_attn" \
+  --attn_implementation "sdpa" \
   --streaming
 ```
 
@@ -355,7 +376,7 @@ evaluate the teacher model on the TED-LIUM validation set in this example:
 #!/usr/bin/env bash
 
 python run_long_form_eval.py \
-  --model_name_or_path "openai/whisper-large-v2" \
+  --model_name_or_path "openai/whisper-large-v3" \
   --dataset_name "distil-whisper/tedlium-long-form" \
   --dataset_config_name "all" \
   --dataset_split_name "validation" \
@@ -434,7 +455,7 @@ minimum values for the pre-trained WER / training data to achieve reasonable per
 
 ## Acknowledgements
 
-* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v2) and [original codebase](https://github.com/openai/whisper)
+* OpenAI for the Whisper [model](https://huggingface.co/openai/whisper-large-v3) and [original codebase](https://github.com/openai/whisper)
 * Hugging Face 🤗 [Transformers](https://github.com/huggingface/transformers) for the Whisper model implementation
 * Google's [TPU Research Cloud (TRC)](https://sites.research.google/trc/about/) program for Cloud TPU v4s used to train the official Distil-Whisper models
 * The Hugging Face 🤗 cluster for enabling experimentation with the PyTorch scripts

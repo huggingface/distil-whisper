@@ -126,6 +126,17 @@ class ModelArguments:
             )
         },
     )
+    attn_implementation: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+            "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
+            "1. `eager` or `None`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
+        },
+    )
 
 
 @dataclass
@@ -227,7 +238,7 @@ class DataTrainingArguments:
         metadata={"help": "Filter audio files that are shorter than `min_duration_in_seconds` seconds"},
     )
     max_label_length: int = field(
-        default=128,
+        default=448,
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
     )
     pad_target_to_multiple_of: Optional[int] = field(
@@ -329,6 +340,10 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
                 "copied from the teacher model."
             )
         },
+    )
+    freeze_embeddings: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to freeze the decoder embedding tokens and positions."},
     )
     temperature: Optional[float] = field(
         default=2.0, metadata={"help": "Temperature to anneal the logits when computing the softmax."}
@@ -505,13 +520,13 @@ def convert_dataset_str_to_list(
     """
     if isinstance(dataset_names, str):
         dataset_names = dataset_names.split("+")
-        dataset_config_names = dataset_config_names.split("+")
+        dataset_config_names = dataset_config_names.split("+") if dataset_config_names is not None else None
         splits = splits.split("+") if splits is not None else None
         text_column_names = text_column_names.split("+") if text_column_names is not None else None
         dataset_samples = dataset_samples.split("+") if dataset_samples is not None else None
 
     # basic checks to ensure we've got the right number of datasets/configs/splits/columns/probs
-    if len(dataset_names) != len(dataset_config_names):
+    if dataset_config_names is not None and len(dataset_names) != len(dataset_config_names):
         raise ValueError(
             f"Ensure one config is passed for each dataset, got {len(dataset_names)} datasets and"
             f" {len(dataset_config_names)} configs."
@@ -538,6 +553,9 @@ def convert_dataset_str_to_list(
     else:
         dataset_samples = [None] * len(dataset_names)
 
+    dataset_config_names = (
+        dataset_config_names if dataset_config_names is not None else ["default" for _ in range(len(dataset_names))]
+    )
     text_column_names = (
         text_column_names if text_column_names is not None else ["text" for _ in range(len(dataset_names))]
     )
@@ -619,6 +637,10 @@ def load_multiple_datasets(
                     "labels by setting `--use_pseudo_labels=False` and defining the appropriate `--text_column_name`."
                 )
             columns_to_keep.add("whisper_transcript")
+
+        if "condition_on_prev" in dataset_features:
+            columns_to_keep.add("condition_on_prev")
+
         dataset_features = dataset.features.keys()
         dataset = dataset.remove_columns(set(dataset_features - columns_to_keep))
         all_datasets.append(dataset)
@@ -921,12 +943,21 @@ def main():
     timestamps = [AddedToken("<|%.2f|>" % (i * 0.02), lstrip=False, rstrip=False) for i in range(1500 + 1)]
     tokenizer.add_tokens(timestamps)
 
+    if model_args.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
+        raise ValueError(
+            f"Got `--attn_implementation={model_args.attn_implementation}`, which is an invalid attention type. Should be one of:"
+            "1. `eager` or `None`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
+
     teacher_model = WhisperForConditionalGeneration.from_pretrained(
         model_args.teacher_model_name_or_path,
         cache_dir=model_args.cache_dir,
         token=model_args.token,
         low_cpu_mem_usage=True,
         torch_dtype=teacher_dtype,
+        attn_implementation=model_args.attn_implementation,
     )
 
     student_model = WhisperForConditionalGeneration.from_pretrained(
@@ -937,6 +968,7 @@ def main():
         subfolder=model_args.subfolder,
         token=model_args.token,
         low_cpu_mem_usage=True,
+        attn_implementation=model_args.attn_implementation,
     )
 
     if student_model.config.decoder_start_token_id is None or teacher_model.config.decoder_start_token_id is None:
@@ -956,6 +988,10 @@ def main():
     if training_args.freeze_encoder:
         student_model.freeze_encoder()
         student_model.model.encoder.gradient_checkpointing = False
+
+    if training_args.freeze_embeddings:
+        student_model.model.decoder.embed_tokens.requires_grad_(False)
+        student_model.model.decoder.embed_positions.requires_grad_(False)
 
     # if share_hidden_states:
     # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
@@ -1016,17 +1052,15 @@ def main():
 
     decoder_start_token_id = student_model.config.decoder_start_token_id  # <|startoftranscript|>
     decoder_prev_token_id = tokenizer.all_special_ids[-3]  # <|startofprev|>
-    decoder_eot_token_id = tokenizer.eos_token_id
-
-    language = data_args.language
-    task = data_args.task
+    prompt_cutoff_length = max_label_length // 2
 
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
+    prefetch_factor = training_args.dataloader_prefetch_factor
 
     metric = evaluate.load("wer")
     normalizer = (
-        BasicTextNormalizer() if language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
     wer_threshold = data_args.wer_threshold
     use_pseudo_labels = data_args.use_pseudo_labels
@@ -1051,16 +1085,10 @@ def main():
     # 10.3: filter training data based on WER threshold -> this is KEY to good distillation performance
     def is_wer_in_range(ground_truth, whisper_transcript):
         norm_ground_truth = normalizer(ground_truth)
-        if (
-            isinstance(whisper_transcript, str)
-            and whisper_transcript.startswith("[")
-            and whisper_transcript.endswith("]")
-        ):
-            whisper_transcript = re.findall(r"\d+", whisper_transcript)
-            whisper_transcript = [int(token) for token in whisper_transcript]
-        if isinstance(whisper_transcript, list):
-            whisper_transcript = tokenizer.decode(whisper_transcript, skip_special_tokens=True)
-        if len(norm_ground_truth) > 0 and whisper_transcript is not None:
+        if whisper_transcript is not None and whisper_transcript.upper() == whisper_transcript:
+            # filter entirely upper-case transcriptions: these are erroneous generations from large-v3
+            return False
+        elif len(norm_ground_truth) > 0 and whisper_transcript is not None:
             norm_whisper_transcript = normalizer(whisper_transcript)
             wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
             return wer < wer_threshold
@@ -1082,20 +1110,12 @@ def main():
         )
 
     # 10.4: pre-process training/evaluation datasets
-    def has_timestamp_tokens(input_str):
-        """
-        Identify whether the input string contains timestamp tokens, of the form <|0.00|>, by searching for
-        pairs of left and right-angle brackets.
-        """
-        return bool(re.search("\<[^\>]*\>", input_str))
-
     def prepare_train_dataset(batch):
         """
         Pre-process the raw dataset in a three stage process:
             1. Convert the audio arrays to log-mel spectrogram inputs
             2. Possibly filter the timestamp tokens from the token ids (depending on the timestamp probability)
             3. Possibly add prompt tokens if conditioning on previous text (depending on the conditioning probability)
-        TODO(SG): see whether we can 'pack' the audio inputs closer to 30 second chunks
         """
         # process audio input
         audio = [sample["array"] for sample in batch["audio"]]
@@ -1105,60 +1125,50 @@ def main():
 
         # process text targets - for training these are the Whisper-generated pseudo-labels
         input_str_batched = batch[train_text_column_name]
+        condition_on_prev_batched = batch.get("condition_on_prev", len(input_str_batched) * [None])
 
         all_token_ids = []
         all_token_ids_unprompted = []
-        for input_str in input_str_batched:
-            if isinstance(input_str, list):
-                # pseudo-labelled transcriptions have been retained as token ids (`decode_token_ids=False`)
-                token_ids = input_str
-            elif input_str[0].startswith("[") and input_str[0].endswith("]"):
-                token_ids = re.findall(r"\d+", input_str)
-                token_ids = [int(token) for token in token_ids]
-            else:
-                token_ids = None
+        for prev_ids, input_str in zip(condition_on_prev_batched, input_str_batched):
+            token_ids = tokenizer(input_str, add_special_tokens=not use_pseudo_labels).input_ids
 
-            if token_ids is not None:
-                # remove the EOT tokens to get the 'true' token length
-                token_ids = [token for token in token_ids if token != decoder_eot_token_id]
-                token_ids = token_ids + [decoder_eot_token_id]
-                # check whether we have timestamps in the PLs and filter if required
-                has_timestamps = len(set(token_ids) & set(timestamp_ids)) > 0
-                if has_timestamps:
-                    # sample from binomial distribution to get probability of training on timestamps
-                    predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
-                    if not predict_timestamps:
-                        # filter timestamps and insert the <|notimestamps|> task token
-                        token_ids = [token for token in token_ids if token < timestamp_begin]
-                        token_ids.insert(timestamp_position, timestamp_begin)
-            else:
-                # pseudo-labelled transcriptions have been decoded to text (`decode_token_ids=True`)
-                has_timestamps = has_timestamp_tokens(input_str)
-
-                if has_timestamps:
-                    predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
-                    if not predict_timestamps:
-                        # filter timestamp token ids if not part of the prediction task
-                        input_str = tokenizer._filter_timestamp_ids(input_str)
-                else:
-                    predict_timestamps = False
-
-                tokenizer.set_prefix_tokens(language=language, task=task, predict_timestamps=predict_timestamps)
-                token_ids = tokenizer(input_str).input_ids
+            # check whether we have timestamps in the PLs and filter if required
+            has_timestamps = len(set(token_ids) & set(timestamp_ids)) > 0
+            if has_timestamps:
+                # sample from binomial distribution to get probability of training on timestamps
+                predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
+                if not predict_timestamps:
+                    # filter timestamps and insert the <|notimestamps|> task token
+                    token_ids = [token for token in token_ids if token < timestamp_begin]
+                    token_ids.insert(timestamp_position, timestamp_begin)
 
             all_token_ids_unprompted.append(token_ids)
             # check whether to condition on previous text - we do this with probability condition_on_prev_probability
             condition_on_prev = bool(np.random.binomial(1, condition_on_prev_probability))
-            if condition_on_prev and len(all_token_ids_unprompted) > 1:
+            if not condition_on_prev:
+                prev_ids = None
+            elif "condition_on_prev" not in batch and len(all_token_ids_unprompted) > 1:
                 # prompt ids are the penultimate token ids in the batch
-                prompt_ids = all_token_ids_unprompted[-2]
-                # strip timestamp tokens from prompt
-                prompt_ids = [token for token in prompt_ids if token < timestamp_begin]
-                if len(prompt_ids) > 0:
-                    # remove the standard task tokens and add the special <|startofprev|> token
-                    prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:-1]
-                if len(prompt_ids + token_ids) < max_label_length:
-                    token_ids = prompt_ids + token_ids
+                prev_ids = all_token_ids_unprompted[-2]
+
+            if prev_ids is not None:
+                if has_timestamps and not predict_timestamps:
+                    # filter timestamp ids from prompt when not predicting timestamps
+                    prev_ids = [token for token in prev_ids if token < timestamp_begin]
+
+                # check that the length of the prompt does not exceed more than half the max label length (224)
+                if len(prev_ids) > prompt_cutoff_length:
+                    prev_ids = prev_ids[-prompt_cutoff_length + 1 :]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+
+                # and that the total length of the labels does not exceed the max label length (448)
+                if len(prev_ids + token_ids) > max_label_length:
+                    trim_length = len(prev_ids + token_ids) - max_label_length + 1
+                    prev_ids = prev_ids[trim_length:]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+
+                token_ids = prev_ids + token_ids
+
             all_token_ids.append(token_ids)
 
         batch["labels"] = all_token_ids
@@ -1507,7 +1517,9 @@ def main():
             collate_fn=data_collator,
             batch_size=per_device_train_batch_size,
             num_workers=dataloader_num_workers,
+            prefetch_factor=prefetch_factor,
             pin_memory=training_args.dataloader_pin_memory,
+
         )
         train_dataloader = accelerator.prepare(train_dataloader)
         if hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDataset):
@@ -1586,6 +1598,7 @@ def main():
                             batch_size=per_device_eval_batch_size,
                             drop_last=False,
                             num_workers=dataloader_num_workers,
+                            prefetch_factor=prefetch_factor,
                             pin_memory=training_args.dataloader_pin_memory,
                         )
                         validation_dataloader = accelerator.prepare(validation_dataloader)
