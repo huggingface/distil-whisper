@@ -1016,7 +1016,6 @@ def main():
 
     decoder_start_token_id = student_model.config.decoder_start_token_id  # <|startoftranscript|>
     decoder_prev_token_id = tokenizer.all_special_ids[-3]  # <|startofprev|>
-    decoder_eot_token_id = tokenizer.eos_token_id
 
     language = data_args.language
     task = data_args.task
@@ -1051,15 +1050,6 @@ def main():
     # 10.3: filter training data based on WER threshold -> this is KEY to good distillation performance
     def is_wer_in_range(ground_truth, whisper_transcript):
         norm_ground_truth = normalizer(ground_truth)
-        if (
-            isinstance(whisper_transcript, str)
-            and whisper_transcript.startswith("[")
-            and whisper_transcript.endswith("]")
-        ):
-            whisper_transcript = re.findall(r"\d+", whisper_transcript)
-            whisper_transcript = [int(token) for token in whisper_transcript]
-        if isinstance(whisper_transcript, list):
-            whisper_transcript = tokenizer.decode(whisper_transcript, skip_special_tokens=True)
         if len(norm_ground_truth) > 0 and whisper_transcript is not None:
             norm_whisper_transcript = normalizer(whisper_transcript)
             wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
@@ -1082,20 +1072,12 @@ def main():
         )
 
     # 10.4: pre-process training/evaluation datasets
-    def has_timestamp_tokens(input_str):
-        """
-        Identify whether the input string contains timestamp tokens, of the form <|0.00|>, by searching for
-        pairs of left and right-angle brackets.
-        """
-        return bool(re.search("\<[^\>]*\>", input_str))
-
     def prepare_train_dataset(batch):
         """
         Pre-process the raw dataset in a three stage process:
             1. Convert the audio arrays to log-mel spectrogram inputs
             2. Possibly filter the timestamp tokens from the token ids (depending on the timestamp probability)
             3. Possibly add prompt tokens if conditioning on previous text (depending on the conditioning probability)
-        TODO(SG): see whether we can 'pack' the audio inputs closer to 30 second chunks
         """
         # process audio input
         audio = [sample["array"] for sample in batch["audio"]]
@@ -1109,42 +1091,17 @@ def main():
         all_token_ids = []
         all_token_ids_unprompted = []
         for input_str in input_str_batched:
-            if isinstance(input_str, list):
-                # pseudo-labelled transcriptions have been retained as token ids (`decode_token_ids=False`)
-                token_ids = input_str
-            elif input_str[0].startswith("[") and input_str[0].endswith("]"):
-                token_ids = re.findall(r"\d+", input_str)
-                token_ids = [int(token) for token in token_ids]
-            else:
-                token_ids = None
+            token_ids = tokenizer(input_str, add_special_tokens=not use_pseudo_labels).input_ids
 
-            if token_ids is not None:
-                # remove the EOT tokens to get the 'true' token length
-                token_ids = [token for token in token_ids if token != decoder_eot_token_id]
-                token_ids = token_ids + [decoder_eot_token_id]
-                # check whether we have timestamps in the PLs and filter if required
-                has_timestamps = len(set(token_ids) & set(timestamp_ids)) > 0
-                if has_timestamps:
-                    # sample from binomial distribution to get probability of training on timestamps
-                    predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
-                    if not predict_timestamps:
-                        # filter timestamps and insert the <|notimestamps|> task token
-                        token_ids = [token for token in token_ids if token < timestamp_begin]
-                        token_ids.insert(timestamp_position, timestamp_begin)
-            else:
-                # pseudo-labelled transcriptions have been decoded to text (`decode_token_ids=True`)
-                has_timestamps = has_timestamp_tokens(input_str)
-
-                if has_timestamps:
-                    predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
-                    if not predict_timestamps:
-                        # filter timestamp token ids if not part of the prediction task
-                        input_str = tokenizer._filter_timestamp_ids(input_str)
-                else:
-                    predict_timestamps = False
-
-                tokenizer.set_prefix_tokens(language=language, task=task, predict_timestamps=predict_timestamps)
-                token_ids = tokenizer(input_str).input_ids
+            # check whether we have timestamps in the PLs and filter if required
+            has_timestamps = len(set(token_ids) & set(timestamp_ids)) > 0
+            if has_timestamps:
+                # sample from binomial distribution to get probability of training on timestamps
+                predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
+                if not predict_timestamps:
+                    # filter timestamps and insert the <|notimestamps|> task token
+                    token_ids = [token for token in token_ids if token < timestamp_begin]
+                    token_ids.insert(timestamp_position, timestamp_begin)
 
             all_token_ids_unprompted.append(token_ids)
             # check whether to condition on previous text - we do this with probability condition_on_prev_probability
