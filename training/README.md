@@ -122,8 +122,8 @@ accelerate launch run_pseudo_labelling.py \
   --max_label_length 256 \
   --concatenate_audio \
   --preprocessing_batch_size 500 \
-  --preprocessing_num_workers 16 \
-  --dataloader_num_workers 16 \
+  --preprocessing_num_workers 8 \
+  --dataloader_num_workers 8 \
   --report_to "wandb" \
   --language "hi" \
   --task "transcribe" \
@@ -133,8 +133,10 @@ accelerate launch run_pseudo_labelling.py \
   --push_to_hub
 ```
 
-On an 80 GB A100 GPU, the following script takes approximately 20 minutes to transcribe a total of 20 hours of audio data.
-The WER of the pre-trained model is TODO% on the test split. 
+On an 80 GB A100 GPU, the following script takes approximately 5 minutes to concatenate and pre-process the 20 hours of 
+audio data, and a further 10 minutes to transcribe the pseudo-labels. The pseudo-labelled dataset corresponding to this
+script is available on the Hugging Face Hub under [sanchit-gandhi/common_voice_16_1_hi_pseudo_labelled](https://huggingface.co/datasets/sanchit-gandhi/common_voice_16_1_hi_pseudo_labelled).
+The WER of the pre-trained Whisper large-v3 model is 17.2% on the test split. We will compare the performance of our distilled model against this number.
 
 There are two noteworthy arguments that configure the dataset concatenation (or packing) process:
 1. `concatenate_audio`: whether or not to concatenate (or pack) the audios to 30-second chunks. The latest Distil-Whisper model, [`distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3#differences-with-distil-large-v2), highlights the WER improvements obtained using the sequential long-form decoding algorithm when concatenated audios are used. Concatenating audios to 30-seconds also improves the throughput during training, since the amount of zero-padding on the audio inputs is minimised. Hence, it is highly recommended to set `--concatenate_audio=True`.
@@ -244,13 +246,11 @@ to any number of training datasets.
 accelerate launch run_distillation.py \
   --model_name_or_path "./distil-large-v3-init" \
   --teacher_model_name_or_path "openai/whisper-large-v3" \
-  --train_dataset_name "../common_voice_16_1_hi_pseudo_labelled+../common_voice_16_1_hi_pseudo_labelled" \
-  --train_dataset_config_name "hi+hi" \
+  --train_dataset_name "./common_voice_16_1_hi_pseudo_labelled+./common_voice_16_1_hi_pseudo_labelled" \
   --train_split_name "train+validation" \
   --text_column_name "sentence+sentence" \
-  --train_dataset_samples "10+5" \
-  --eval_dataset_name "../common_voice_16_1_hi_pseudo_labelled" \
-  --eval_dataset_config_name "hi" \
+  --train_dataset_samples "7+4" \
+  --eval_dataset_name "./common_voice_16_1_hi_pseudo_labelled" \
   --eval_split_name "test" \
   --eval_text_column_name "sentence" \
   --eval_steps 1000 \
@@ -258,14 +258,17 @@ accelerate launch run_distillation.py \
   --warmup_steps 50 \
   --learning_rate 0.0001 \
   --lr_scheduler_type "constant_with_warmup" \
+  --timestamp_probability 0.2 \
+  --condition_on_prev_probability 0.2 \
   --logging_steps 25 \
   --save_total_limit 1 \
   --max_steps 5000 \
-  --wer_threshold 10 \
-  --per_device_train_batch_size 64 \
-  --per_device_eval_batch_size 64 \
-  --dataloader_num_workers 16 \
-  --preprocessing_num_workers 16 \
+  --wer_threshold 20 \
+  --per_device_train_batch_size 32 \
+  --per_device_eval_batch_size 32 \
+  --dataloader_num_workers 8 \
+  --dataloader_prefetch_factor 2 \
+  --preprocessing_num_workers 8 \
   --ddp_timeout 7200 \
   --dtype "bfloat16" \
   --attn_implementation "sdpa" \
@@ -276,6 +279,7 @@ accelerate launch run_distillation.py \
   --overwrite_output_dir \
   --predict_with_generate \
   --freeze_encoder \
+  --freeze_embeddings \
   --streaming False \
   --push_to_hub
 
@@ -295,15 +299,21 @@ above script can then be run using DDP with no code changes.
 Training logs will be reported to TensorBoard and WandB, provided the relevant packages are available. An example of a 
 saved checkpoint pushed to the Hugging Face Hub can be found here: [sanchit-gandhi/distil-whisper-large-v3-hi](https://huggingface.co/sanchit-gandhi/distil-whisper-large-v3-hi).
 
-There are a few noteworthy arguments that can be configured to give optimal training performance:
+There are a few noteworthy data arguments:
 1. `train_dataset_samples`: defines the number of training samples in each dataset. Used to calculate the sampling probabilities in the dataloader. A good starting point is setting the samples to the number of hours of audio data in each split. A more refined strategy is setting it to the number of training samples in each split, however this might require downloading the dataset offline to compute these statistics.
-2. `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong.
-3. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
-4. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
-5. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model.
-6. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
-7. `timestamp_probability`: the per-sample probability for retaining timestamp tokens in the labels (should they contain them). Retaining some portion of timestamp tokens in the training data is required to ensure the distilled model can predict timestamps at inference time. In our experiments, we found that training on timestamps with high-probability hurts the distilled model's transcription performance. Thus, we recommend setting this to a value below 0.5. Typically, a value of 0.2 works well, giving good transcription and timestamp performance.
-8. `condition_on_prev_probability`: the per-sample probability for conditioning on previous labels. Conditioning on previous tokens is required to ensure the distilled model can be used with the "sequential" long-form transcription algorithm at inference time. We did not experiment with this parameter, but found a value of 0.1 to provide adequate performance. OpenAI pre-trained Whisper on with a 50% probability for conditioning on previous tokens. Thus, you might wish to try higher values.
+2. `wer_threshold`: sets the WER threshold between the normalised pseudo-labels and normalised ground truth labels. Any samples with WER > `wer_threshold` are discarded from the training data. This is beneficial to avoid training the student model on pseudo-labels where Whisper hallucinated or got the predictions grossly wrong. In our English distillation experiments, we found a WER threshold of 10% provides the optimal trade-off between ensuring high-quality transcriptions, and not filtering unnecessary amounts of training data. For multilingual distillation, the threshold should be set in accordance with the WER achieved by the pre-trained model on the test set.
+3. `streaming`: whether or not to use Datasets' streaming mode. Recommended for large datasets, where the audio data can be streamed from the Hugging Face Hub with no disk space requirements.
+4. `timestamp_probability`: the per-sample probability for retaining timestamp tokens in the labels (should they contain them). Retaining some portion of timestamp tokens in the training data is required to ensure the distilled model can predict timestamps at inference time. In our experiments, we found that training on timestamps with high-probability hurts the distilled model's transcription performance. Thus, we recommend setting this to a value below 0.5. Typically, a value of 0.2 works well, giving good transcription and timestamp performance.
+5. `condition_on_prev_probability`: the per-sample probability for conditioning on previous labels. Conditioning on previous tokens is required to ensure the distilled model can be used with the "sequential" long-form transcription algorithm at inference time. We did not experiment with this parameter, but found values around 0.2 to provide adequate performance. OpenAI pre-trained Whisper on with a 50% probability for conditioning on previous tokens. Thus, you might wish to try higher values.
+
+As well as a few noteworthy model arguments that can be configured to give optimal training performance:
+1. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
+2. `freeze_embeddings`: whether to freeze the student model's decoder input and positional embeddings. Using the same input embeds representation as the teacher model, which is designed to handle context lengths up to 448 tokens, helps the student model retain its input id representation up to the full max input length. 
+3. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
+
+And finally, a few noteworthy training arguments:
+1. `max_steps`: defines the total number of optimisation steps (forward + backward pass) during training. To reach convergence, you should use a dataset of at least 1k hours and train for a minimum of 50k steps.
+2. `lr_scheduler_stype`: defines the learning rate schedule, one of `constant_with_warmup` or `linear`. When experimenting with a training set-up or training for very few steps (< 5k), using `constant_with_warmup` is typically beneficial, since the learning rate remains high over the short training run. When performing long training runs (> 5k), using a `linear` schedule generally results in superior downstream performance of the distilled model.
 
 TODO:
 - [ ] Template for model cards
@@ -335,7 +345,7 @@ accelerate launch run_short_form_eval.py \
   --output_dir "./" \
   --per_device_eval_batch_size 64 \
   --dtype "bfloat16" \
-  --dataloader_num_workers 16 \
+  --dataloader_num_workers 8 \
   --report_to "wandb" \
   --generation_max_length 128 \
   --language "hi" \
