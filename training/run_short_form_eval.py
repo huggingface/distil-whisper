@@ -24,6 +24,7 @@ import os
 import string
 import sys
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -161,7 +162,7 @@ class ModelArguments:
                     "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
                     "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
                 )
-            logger.warning(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`.")
+            warnings.warn(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`.")
         elif self.attn_type is not None and self.attn_implementation is not None:
             raise ValueError("`--attn_type` and `--attn_implementation` are both specified. Only the argument `--attn_implementation`.")
 
