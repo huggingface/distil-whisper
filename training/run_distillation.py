@@ -131,7 +131,7 @@ class ModelArguments:
         metadata={
             "help": (
             "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
-            "1. `eager`: default Transformers attention implementation."
+            "1. `eager` or `None`: default Transformers attention implementation."
             "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
             "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
         )
@@ -1054,15 +1054,13 @@ def main():
     decoder_prev_token_id = tokenizer.all_special_ids[-3]  # <|startofprev|>
     prompt_cutoff_length = max_label_length // 2
 
-    language = data_args.language
-    task = data_args.task
-
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
+    prefetch_factor = training_args.dataloader_prefetch_factor
 
     metric = evaluate.load("wer")
     normalizer = (
-        BasicTextNormalizer() if language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
     wer_threshold = data_args.wer_threshold
     use_pseudo_labels = data_args.use_pseudo_labels
@@ -1519,7 +1517,9 @@ def main():
             collate_fn=data_collator,
             batch_size=per_device_train_batch_size,
             num_workers=dataloader_num_workers,
+            prefetch_factor=prefetch_factor,
             pin_memory=training_args.dataloader_pin_memory,
+
         )
         train_dataloader = accelerator.prepare(train_dataloader)
         if hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDataset):
@@ -1598,6 +1598,7 @@ def main():
                             batch_size=per_device_eval_batch_size,
                             drop_last=False,
                             num_workers=dataloader_num_workers,
+                            prefetch_factor=prefetch_factor,
                             pin_memory=training_args.dataloader_pin_memory,
                         )
                         validation_dataloader = accelerator.prepare(validation_dataloader)
