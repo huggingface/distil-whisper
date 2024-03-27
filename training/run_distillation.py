@@ -126,6 +126,17 @@ class ModelArguments:
             )
         },
     )
+    attn_implementation: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+            "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
+            "1. `eager`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
+        },
+    )
 
 
 @dataclass
@@ -921,12 +932,21 @@ def main():
     timestamps = [AddedToken("<|%.2f|>" % (i * 0.02), lstrip=False, rstrip=False) for i in range(1500 + 1)]
     tokenizer.add_tokens(timestamps)
 
+    if model_args.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
+        raise ValueError(
+            f"Got `--attn_implementation={model_args.attn_implementation}`, which is an invalid attention type. Should be one of:"
+            "1. `eager`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
+
     teacher_model = WhisperForConditionalGeneration.from_pretrained(
         model_args.teacher_model_name_or_path,
         cache_dir=model_args.cache_dir,
         token=model_args.token,
         low_cpu_mem_usage=True,
         torch_dtype=teacher_dtype,
+        attn_implementation=model_args.attn_implementation,
     )
 
     student_model = WhisperForConditionalGeneration.from_pretrained(
@@ -937,6 +957,7 @@ def main():
         subfolder=model_args.subfolder,
         token=model_args.token,
         low_cpu_mem_usage=True,
+        attn_implementation=model_args.attn_implementation,
     )
 
     if student_model.config.decoder_start_token_id is None or teacher_model.config.decoder_start_token_id is None:

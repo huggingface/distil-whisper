@@ -128,17 +128,29 @@ class ModelArguments:
             )
         },
     )
-    attn_type: Optional[str] = field(
+    attn_implementation: Optional[str] = field(
         default=None,
         metadata={
             "help": (
-                "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
-                "1. `None`: default Transformers attention implementation."
-                "2. `flash_attn`: Flash Attention through PyTorch SDPA. Requires `torch>=2.0` and `optimum` to be installed. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)"
-                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)"
-            )
+            "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
+            "1. `eager`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
         },
     )
+    attn_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Use `attn_implementation` instead."
+        },
+    )
+    def __post_init__(self):
+        if self.attn_type is not None and self.attn_implementation is None:
+            logger.warning(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Setting `--attn_implementation={self.attn_type}.")
+            self.attn_implementation = self.attn_type
+        elif self.attn_type is not None and self.attn_implementation is not None:
+            raise ValueError("`--attn_type` and `--attn_implementation` are both specified. Only the argument `--attn_implementation`.")
 
 
 @dataclass
@@ -517,6 +529,22 @@ def main():
         revision=model_args.model_revision,
         token=token,
     )
+    
+    # set attn_implementation in a backwards compatible way
+    if model_args.attn_implementation == "flash_attn":
+        attn_implementation = "sdpa"
+    elif model_args.attn_implementation == "flash_attn_2":
+        attn_implementation = "flash_attention_2"
+    elif model_args.attn_implementation in [None, "eager", "sdpa", "flash_attention_2"]:
+        attn_implementation = model_args.attn_implementation
+    else:
+        raise ValueError(
+            f"Got `--attn_implementation={model_args.attn_implementation}`, which is an invalid attention implementation. Should be one of:"
+            "1. `eager`: default Transformers attention implementation."
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+        )
+
     model = WhisperForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
         config=config,
@@ -526,19 +554,8 @@ def main():
         token=token,
         low_cpu_mem_usage=True,
         torch_dtype=torch_dtype,
-        use_flash_attention_2=model_args.attn_type == "flash_attn_2",
+        attn_implementation=attn_implementation,
     )
-
-    if model_args.attn_type == "flash_attn":
-        model = model.to_bettertransformer()
-    elif model_args.attn_type not in [None, "flash_attn", "flash_attn_2"]:
-        raise ValueError(
-            f"Argument `attn_type` is set to {model_args.attn_type}. Should be one of:"
-            "1. `None`: default Transformers attention implementation."
-            "2. `flash_attn`: Flash Attention through PyTorch SDPA. Requires `torch>=2.0` and `optimum` to be installed. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
-            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-        )
-
     model.eval()
 
     if model.config.decoder_start_token_id is None:

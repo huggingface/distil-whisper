@@ -120,7 +120,7 @@ accelerate launch run_pseudo_labelling.py \
   --language "hi" \
   --task "transcribe" \
   --return_timestamps \
-  --attn_type "flash_attn" \
+  --attn_implementation "sdpa" \
   --streaming False \
   --generation_num_beams 1 \
   --push_to_hub
@@ -132,7 +132,7 @@ The WER of the pre-trained model is 23.8% on the test split.
 There are a few noteworthy arguments that can be configured:
 1. `language`: explicitly setting the language token during inference substantially improves the generation performance of the Whisper model, since the model is forced always to predict in the given language. We recommend you set the language to the language you wish to distil the Whisper model on. The only exception is when distilling an English-only model (i.e. where the model id is appended with an `.en`, e.g. `small.en`), the language argument should be set to None, since there is no language token used during training/inference.
 2. `return_timestamps`: whether or not to predict timestamps in the pseudo-labels. Timestamp prediction is required should you want your distilled model to be able to predict timestamps at inference time (e.g. for the original OpenAI long-form transcription algorithm). However, the pseudo-labels are marginally less accurate than not using timestamps. We recommend pseudo-labelling **with** timestamps to ensure the distilled model is as general as possible.
-3. `attn_type`: which attention implementation to use for inference. Set to `flash_attn` for [PyTorch SDPA](https://huggingface.co/docs/transformers/v4.35.2/en/perf_infer_gpu_one#bettertransformer), or `flash_attn_2` if your hardware supports Flash Attention 2 and you have the [package installed](https://github.com/Dao-AILab/flash-attention).
+3. `attn_implementation`: which attention implementation to use for inference. Set to `sdpa` for [PyTorch SDPA](https://huggingface.co/docs/transformers/v4.35.2/en/perf_infer_gpu_one#bettertransformer), or `flash_attn_2` if your hardware supports Flash Attention 2 and you have the [package installed](https://github.com/Dao-AILab/flash-attention).
 4. `streaming`: whether or not to use Datasets' streaming mode. If enabled, the audio data will be streamed from the Hugging Face Hub with no disk space requirements. However, the user is then responsible for adding the pseudo-labels to the dataset script in a follow-up step (see [Using Streaming Mode](#TODO)). If set to `False`, the audio data will be downloaded and pre-processed offline. At the end of pseudo-labelling, the pseudo-labels will be automatically appended to the original dataset, meaning the dataset is ready to be used for the subsequent training step without any additional steps.
 5. `generation_num_beams`: how many beams to use while decoding. In practice, we found the distilled model to perform comparably when the data was pseudo-labelled with `generation_num_beams=1` (greedy) or `generation_num_beams>1` (beam). This is likely because the WER filter compensates for the lower quality pseudo-labels obtained using greedy search. However, using `generation_num_beams=1` gives substantially faster inference time for the pseudo-labelling step, and so we recommend this configuration.
 
@@ -256,6 +256,7 @@ accelerate launch run_distillation.py \
   --preprocessing_num_workers 16 \
   --ddp_timeout 7200 \
   --dtype "bfloat16" \
+  --attn_implementation "sdpa" \
   --output_dir "./" \
   --do_train \
   --do_eval \
@@ -326,7 +327,7 @@ accelerate launch run_short_form_eval.py \
   --report_to "wandb" \
   --generation_max_length 128 \
   --language "hi" \
-  --attn_type "flash_attn" \
+  --attn_implementation "sdpa" \
   --streaming
 ```
 
