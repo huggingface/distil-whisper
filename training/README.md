@@ -115,7 +115,7 @@ accelerate launch run_pseudo_labelling.py \
   --dataloader_num_workers 16 \
   --preprocessing_num_workers 16 \
   --logging_steps 500 \
-  --max_label_length 128 \
+  --max_label_length 256 \
   --report_to "wandb" \
   --language "hi" \
   --task "transcribe" \

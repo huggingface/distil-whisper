@@ -192,7 +192,7 @@ class DataTrainingArguments:
         metadata={"help": "The name of the dataset column containing the id data. Defaults to 'id'"},
     )
     max_label_length: int = field(
-        default=128,
+        default=256,
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
     )
     preprocessing_only: bool = field(
