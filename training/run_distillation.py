@@ -137,6 +137,14 @@ class ModelArguments:
         )
         },
     )
+    def __post_init__(self):
+        if self.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
+            raise ValueError(
+                f"Got `--attn_implementation={self.attn_implementation}`, which is an invalid attention type. Should be one of:\n"
+                "1. `eager` or `None`: default Transformers attention implementation.\n"
+                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
+                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+            )
 
 
 @dataclass
@@ -366,14 +374,6 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
-    def __post_init__(self):
-        if self.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
-            raise ValueError(
-                f"Got `--attn_implementation={self.attn_implementation}`, which is an invalid attention type. Should be one of:\n"
-                "1. `eager` or `None`: default Transformers attention implementation.\n"
-                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
-                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-            )
 
 
 @dataclass
@@ -984,7 +984,7 @@ def main():
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
-        # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
+        # tie the weights for the teacher encoder if we're freezing the student and it's the same as the teacher
         teacher_model.model.encoder = student_model.model.encoder
 
     if hasattr(teacher_model.generation_config, "is_multilingual") and teacher_model.generation_config.is_multilingual:
