@@ -130,9 +130,9 @@ class ModelArguments:
         default=None,
         metadata={
             "help": (
-            "Which attention type to use in the encoder and decoder attention layers. Can be one of:"
-            "1. `eager` or `None`: default Transformers attention implementation."
-            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
+            "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
+            "1. `eager` or `None`: default Transformers attention implementation.\n"
+            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
             "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
         )
         },
@@ -366,6 +366,14 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
+    def __post_init__(self):
+        if self.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
+            raise ValueError(
+                f"Got `--attn_implementation={self.attn_implementation}`, which is an invalid attention type. Should be one of:\n"
+                "1. `eager` or `None`: default Transformers attention implementation.\n"
+                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
+                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+            )
 
 
 @dataclass
@@ -405,10 +413,9 @@ class DataCollatorSpeechSeq2SeqWithPadding:
     def __call__(self, features: List[Dict[str, Union[List[int], np.ndarray]]]) -> Dict[str, np.ndarray]:
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
-        model_input_name = self.processor.model_input_names[0]
 
         # dataloader returns a list of features which we convert to a dict
-        input_features = {model_input_name: [feature[model_input_name] for feature in features]}
+        input_features = {"input_features": [feature["input_features"] for feature in features]}
         label_features = {"input_ids": [feature["labels"] for feature in features]}
 
         # reformat list to dict and set to pytorch format
@@ -662,23 +669,6 @@ def load_multiple_datasets(
     return interleaved_dataset
 
 
-def get_layers_to_supervise(student_layers: int, teacher_layers: int) -> Dict:
-    """Helper function to map the student layer i to the teacher layer j whose output we'd like them to emulate. Used
-    for MSE loss terms in distillation (hidden-states and activations). Student layers are paired with teacher layers
-    in equal increments, e.g. for a 12-layer model distilled to a 3-layer model, student layer 0 emulates teacher layer
-    3 (such that it behaves like the first 4 teacher layers), student layer 1 emulates teacher layer 7, and student layer
-    2 emulates teacher layer 11. This mapping is summarised by the dictionary: {0: 3, 1: 7, 2: 11}, which is precisely
-    the output of this function for the arguments (student_layers=3, teacher_layers=12)."""
-    layer_intervals = np.linspace(teacher_layers // student_layers - 1, teacher_layers - 1, student_layers, dtype=int)
-    layer_intervals[-1] = teacher_layers - 1
-    layer_map = {}
-
-    for student_layer, teacher_layer in enumerate(layer_intervals):
-        layer_map[student_layer] = teacher_layer
-
-    return layer_map
-
-
 def sorted_checkpoints(output_dir=None, checkpoint_prefix="checkpoint") -> List[str]:
     """Helper function to sort saved checkpoints from oldest to newest."""
     ordering_and_checkpoint_path = []
@@ -764,8 +754,6 @@ def main():
     # We simply have to specify the training precision and any trackers being used
     # We'll use the same dtype arguments as our JAX/Flax training script and convert
     # it to accelerate format
-    # The teacher model can safely be cast to the dtype of training since we don't
-    # update the params
     if training_args.dtype == "float16":
         mixed_precision = "fp16"
         teacher_dtype = torch.float16
@@ -943,14 +931,8 @@ def main():
     timestamps = [AddedToken("<|%.2f|>" % (i * 0.02), lstrip=False, rstrip=False) for i in range(1500 + 1)]
     tokenizer.add_tokens(timestamps)
 
-    if model_args.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
-        raise ValueError(
-            f"Got `--attn_implementation={model_args.attn_implementation}`, which is an invalid attention type. Should be one of:"
-            "1. `eager` or `None`: default Transformers attention implementation."
-            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080)."
-            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-        )
-
+    # The teacher model can safely be cast to the dtype of training since we don't
+    # update the params
     teacher_model = WhisperForConditionalGeneration.from_pretrained(
         model_args.teacher_model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -978,8 +960,6 @@ def main():
             f"student and {teacher_model.config.decoder_start_token_id} for the teacher."
         )
 
-    share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
-
     # enable gradient checkpointing if necessary
     if training_args.gradient_checkpointing:
         student_model.gradient_checkpointing_enable()
@@ -1002,9 +982,10 @@ def main():
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
 
-    # if share_hidden_states:
-    # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
-    #    student_model.model.encoder = teacher_model.model.encoder
+    share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
+    if share_hidden_states:
+        # tie the weights for the student encoder if we're freezing it and it's the same as the teacher
+        teacher_model.model.encoder = student_model.model.encoder
 
     if hasattr(teacher_model.generation_config, "is_multilingual") and teacher_model.generation_config.is_multilingual:
         # We need to set the language and task ids for previously multilingual checkpoints
@@ -1207,11 +1188,12 @@ def main():
             batched=True,
             batch_size=data_args.preprocessing_batch_size,
         )
-        vectorized_datasets["train"] = (
-            map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
-            if not data_args.streaming
-            else map_fn_train()
-        )
+        if accelerator.is_main_process:
+            vectorized_datasets["train"] = (
+                map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
+                if not data_args.streaming
+                else map_fn_train()
+            )
     if training_args.do_eval:
         for eval_split in all_eval_splits:
             raw_datasets_eval_features = list(raw_datasets[eval_split].features.keys())
@@ -1232,11 +1214,12 @@ def main():
     filter_by_audio_fn = partial(
         vectorized_datasets.filter, function=is_audio_in_length_range, input_columns=["input_length"]
     )
-    vectorized_datasets = (
-        filter_by_audio_fn(num_proc=num_workers, desc="filtering train dataset by audio length")
-        if not data_args.streaming
-        else filter_by_audio_fn()
-    )
+    if accelerator.is_main_process:
+        vectorized_datasets = (
+            filter_by_audio_fn(num_proc=num_workers, desc="filtering train dataset by audio length")
+            if not data_args.streaming
+            else filter_by_audio_fn()
+        )
 
     # 10.6: Filter training data with labels longer than `max_label_length`
     def is_labels_in_length_range(labels):
@@ -1245,11 +1228,12 @@ def main():
     filter_by_labels_fn = partial(
         vectorized_datasets.filter, function=is_labels_in_length_range, input_columns=["labels"]
     )
-    vectorized_datasets = (
-        filter_by_labels_fn(num_proc=num_workers, desc="filtering train dataset")
-        if not data_args.streaming
-        else filter_by_labels_fn()
-    )
+    if accelerator.is_main_process:
+        vectorized_datasets = (
+            filter_by_labels_fn(num_proc=num_workers, desc="filtering train dataset")
+            if not data_args.streaming
+            else filter_by_labels_fn()
+        )
 
     # Pre-processing complete!
     # For large datasets it is advised to run the preprocessing on a
@@ -1378,7 +1362,7 @@ def main():
         "num_beams": num_beams,
         "return_timestamps": return_timestamps,
     }
-    if hasattr(teacher_model.generation_config, "is_multilingual") and teacher_model.generation_config.is_multilingual:
+    if is_multilingual:
         # forcing the language and task tokens helps multilingual models in their generations
         gen_kwargs.update(
             {
@@ -1416,7 +1400,7 @@ def main():
             if share_hidden_states:
                 # if the student and teacher share the same frozen encoder then we don't have to recompute the
                 # encoder hidden-states for the teacher model, we can just re-use from the student
-                encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state)
+                encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state.to(dtype=teacher_dtype))
                 teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
                 # do the full forward pass for the teacher model (encoder + decoder)
@@ -1444,7 +1428,7 @@ def main():
         with torch.no_grad():
             student_outputs = student_model(**batch)
             if share_hidden_states:
-                encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state)
+                encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state.to(dtype=teacher_dtype))
                 teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
                 teacher_outputs = teacher_model(**batch)
