@@ -45,7 +45,7 @@ from datasets import (
     interleave_datasets,
     load_dataset,
 )
-from huggingface_hub import Repository, create_repo
+from huggingface_hub import create_repo, get_full_repo_name, upload_folder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
@@ -813,14 +813,14 @@ def main():
     # 5. Handle the repository creation
     if accelerator.is_main_process:
         if training_args.push_to_hub:
-            # Retrieve of infer repo_name
-            repo_name = training_args.hub_model_id
-            if repo_name is None:
-                repo_name = Path(training_args.output_dir).absolute().name
-            # Create repo and retrieve repo_id
-            repo_id = create_repo(repo_name, exist_ok=True, token=training_args.hub_token).repo_id
-            # Clone repo locally
-            repo = Repository(training_args.output_dir, clone_from=repo_id, token=training_args.hub_token)
+            if training_args.hub_model_id is None:
+                repo_name = get_full_repo_name(
+                    Path(training_args.output_dir).absolute().name,
+                    token=training_args.hub_token,
+                )
+            else:
+                repo_name = training_args.hub_model_id
+            create_repo(repo_name, exist_ok=True, token=training_args.hub_token)
 
             with open(os.path.join(training_args.output_dir, ".gitignore"), "w+") as gitignore:
                 if "wandb" not in gitignore:
@@ -1576,9 +1576,11 @@ def main():
                             student_model = accelerator.prepare(student_model)
 
                         if training_args.push_to_hub:
-                            repo.push_to_hub(
+                            upload_folder(
+                                folder_path=training_args.output_dir,
+                                repo_id=repo_name,
+                                repo_type="model",
                                 commit_message=f"Saving train state of step {cur_step}",
-                                blocking=False,
                             )
 
                 if training_args.do_eval and (cur_step % eval_steps == 0 or cur_step == total_train_steps):
