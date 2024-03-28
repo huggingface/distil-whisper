@@ -157,11 +157,11 @@ replacing the `--dataset_name` with the name of your dataset on the Hub.
 Otherwise, you may wish to use an open-source dataset already available on the Hugging Face Hub. We provide a summary of 
 the three most popular multilingual datasets in the table below. For more details, refer to the blog post: [A Complete Guide to Audio Datasets](https://huggingface.co/blog/audio-datasets#multilingual-speech-recognition).
 
-| Dataset                                                                                       | Languages | Domain                                | Speaking Style | License   | Text Column  | ID Column    |
-|-----------------------------------------------------------------------------------------------|-----------|---------------------------------------|----------------|-----------|--------------|--------------|
-| [Multilingual LibriSpeech](https://huggingface.co/datasets/facebook/multilingual_librispeech) | 6         | Audiobooks                            | Narrated       | CC-BY-4.0 | `"sentence"` | `"path"`     |
-| [Common Voice 16](https://huggingface.co/datasets/mozilla-foundation/common_voice_16_1)       | 120       | Wikipedia text & crowd-sourced speech | Narrated       | CC0-1.0   | `"raw_text"` | `"audio_id"` |
-| [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli)                               | 15        | European Parliament recordings        | Spontaneous    | CC0       | `"text"`     | `"id"`       |
+| Dataset                                                                                       | Languages | Domain                                | Speaking Style | License   | Text Column         | ID Column    |
+|-----------------------------------------------------------------------------------------------|-----------|---------------------------------------|----------------|-----------|---------------------|--------------|
+| [Multilingual LibriSpeech](https://huggingface.co/datasets/facebook/multilingual_librispeech) | 6         | Audiobooks                            | Narrated       | CC-BY-4.0 | `"text"`            | `"id"`       |
+| [Common Voice 16](https://huggingface.co/datasets/mozilla-foundation/common_voice_16_1)       | 120       | Wikipedia text & crowd-sourced speech | Narrated       | CC0-1.0   | `"sentence"`        | `"path"`     |
+| [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli)                               | 15        | European Parliament recordings        | Spontaneous    | CC0       | `"normalized_text"` | `"audio_id"` |
 
 To achieve *robustness* to different distributions of audio data, it is recommended to train on multiple datasets where possible.
 For example, the above three datasets all have splits for the German language. Thus, if distilling a Whisper model for German,
