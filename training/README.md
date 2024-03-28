@@ -395,7 +395,7 @@ on the TED-LIUM validation set:
 accelerate launch run_eval.py \
   --model_name_or_path "distil-whisper/distil-large-v3" \
   --dataset_name "distil-whisper/tedlium-long-form" \
-  --dataset_config_name "all" \
+  --dataset_config_name "default" \
   --dataset_split_name "validation" \
   --text_column_name "text" \
   --batch_size 16 \
@@ -427,7 +427,7 @@ TED-LIUM validation set:
 python run_eval.py \
   --model_name_or_path "openai/whisper-large-v3" \
   --dataset_name "distil-whisper/tedlium-long-form" \
-  --dataset_config_name "all" \
+  --dataset_config_name "default" \
   --dataset_split_name "validation" \
   --text_column_name "text" \
   --use_pipeline \
