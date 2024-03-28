@@ -286,9 +286,10 @@ accelerate launch run_distillation.py \
 
 ```
 
-The above training script will take approximately 1 hour to complete on an 80 GB A100 GPU and yield a final WER of TODO%.
-This is reasonable for 1000 training steps and just 15 hours of un-filtered training data, but 12% higher than the error rate of the 
-pre-trained model. As mentioned above, using upwards of 1000 hours of data and training for 10k steps will likely yield
+The above training script will take approximately 3 hours to complete on an 80 GB A100 GPU and yield a final WER of 76%.
+While the generations are starting to take form, there is still a 59% WER gap to the teacher model. This is hardly
+surprising give we only have 15 hours of un-filtered data, and closer to just 1.5 hours with data filtering. 
+As mentioned above, using upwards of 1000 hours of data and training for 10k steps will likely yield
 more competitive performance. For the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430), we trained on 21k hours
 of audio data for 80k steps. We found that upwards of 13k hours of audio data was required to reach convergence on English 
 ASR (see Section 9.2 of the [paper](https://arxiv.org/abs/2311.00430)), so the more data you have, the better!
