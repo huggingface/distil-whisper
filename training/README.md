@@ -260,6 +260,8 @@ accelerate launch run_distillation.py \
   --lr_scheduler_type "constant_with_warmup" \
   --timestamp_probability 0.2 \
   --condition_on_prev_probability 0.2 \
+  --language "hi" \
+  --task "transcribe" \
   --logging_steps 25 \
   --save_total_limit 1 \
   --max_steps 5000 \
@@ -284,7 +286,7 @@ accelerate launch run_distillation.py \
 
 ```
 
-The above training script will take approximately 1 hour to complete on an 80 GB A100 GPU and yield a final WER of 31%.
+The above training script will take approximately 1 hour to complete on an 80 GB A100 GPU and yield a final WER of TODO%.
 This is reasonable for 1000 training steps and just 15 hours of un-filtered training data, but 12% higher than the error rate of the 
 pre-trained model. As mentioned above, using upwards of 1000 hours of data and training for 10k steps will likely yield
 more competitive performance. For the [Distil-Whisper paper](https://arxiv.org/abs/2311.00430), we trained on 21k hours
@@ -319,47 +321,94 @@ TODO:
 
 ## 4. Evaluation
 
-There are two types of evaluation performed in Distil-Whisper:
+There are four types of evaluation performed in Distil-Whisper:
 1. Short form: evaluation on audio samples less than 30s in duration. Examples include typical ASR test sets, such as the LibriSpeech validation set.
-2. Long form: evaluation on audio samples longer than 30s in duration. Examples include entire TED talks or earnings calls.
+2. Sequential long form: evaluation on audio samples longer than 30s in duration using the original "sequential" long-form algorithm. Examples include entire TED talks or earnings calls.
+3. Chunked long form: evaluation on audio samples longer than 30s in duration using the Transformers "chunked" long-form algorithm.
+4. Speculative decoding: evaluation on audio samples less than 30s in duration, where a faster, distilled model is used as the assistant to a slower, teacher model. 
 
-Both forms of evaluation are performed using the *word-error rate (WER)* metric.
+All four forms of evaluation are performed using the script [`run_eval.py`](run_eval.py). Unlike the pseudo-labelling
+and training scripts, the evaluation script assumes that only one GPU accelerator is used. We can copy the corresponding 
+evaluation script to the model repository using the following command:
+
+```bash
+cp ../distil-whisper/training/run_eval.py .
+```
+
+Models are assessed jointly using:
+1. The *word-error rate (WER)* metric: measures the numer of substitution, deletion and insertion errors relative to the total number of words. A lower WER indicates a more accurate model.
+2. The *inverse real-time factor (RTFx)* metric: measures the ratio of `audio input time : model compute time`. A higher RTFx indicates a faster model.
+
+In all cases, it is particularly important to evaluate the final model on data that is *out-of-distribution (OOD)* with 
+the training data. Evaluating on OOD data provides insight as to how well the distilled model is likely to generalise to 
+different audio distributions at inference time. In our example, the Common Voice test set is *in-distribution (ID)* 
+with our training data, since it is taken from the same distribution as the Common Voice training set. Whereas the FLEURS 
+test set is OOD, since it is not used as part of the training set.
 
 ### Short Form
 
-The script [`run_short_form_eval.py`](run_short_form_eval.py) can be used to evaluate a trained student model over 
-multiple validation sets. The following example demonstrates how to evaluate the student model trained in the previous 
-step on the Common Voice `test` set and also the FLEURS `test` set. Again, it leverages streaming mode to 
-bypass the need to download the data offline:
+The script [`run_eval.py`](run_eval.py) can be used to evaluate a trained student model over multiple short-form 
+validation sets. The following example demonstrates how to evaluate the student model trained in the previous step on 
+the Common Voice `test` set (ID) and also the FLEURS `test` set (OOD). Again, it leverages streaming mode to bypass 
+the need to download the data offline:
 
 ```bash
 #!/usr/bin/env bash
 
-accelerate launch run_short_form_eval.py \
+python run_eval.py \
   --model_name_or_path "./" \
   --dataset_name "../common_voice_16_1_hi_pseudo_labelled+google/fleurs" \
-  --dataset_config_name "hi+hi_in" \
+  --dataset_config_name "default+hi_in" \
   --dataset_split_name "test+test" \
   --text_column_name "sentence+transcription" \
-  --output_dir "./" \
-  --per_device_eval_batch_size 64 \
+  --batch_size 16 \
   --dtype "bfloat16" \
-  --dataloader_num_workers 8 \
-  --report_to "wandb" \
-  --generation_max_length 128 \
+  --generation_max_length 256 \
   --language "hi" \
   --attn_implementation "sdpa" \
   --streaming
+
 ```
 
-It is particularly important to evaluate the final model on data that is *out-of-distribution (OOD)* with the training data. 
-Evaluating on OOD data provides insight as to how well the distilled model is likely to generalise to different audio 
-distributions at inference time. In this example, Common Voice is *in-distribution (ID)*, since it is taken from the same 
-distribution as the Common Voice training set, whereas FLEURS is OOD, since it is not used as part of the training set.
+The student model achieves an average WER of TODO% with an RTFx of TODO for a batch size of 16. We can easily adapt the above
+script to evaluate the teacher model, simply by switching the `model_name_or_path` to `openai/whisper-large-v3`, which 
+achieves an average WER of TODO% with an RTFx of TODO. Therefore, for a batch size of 16, the student model is a factor of TODO
+times faster than the teacher. The WER gap can be closed by training on more data (at least 1k hours) for more training
+steps (at least 50k).
 
-### Long Form
+### Sequential Long Form
 
-Long form evaluation runs on the premise that a single long audio file can be *chunked* into smaller segments and 
+The original Whisper paper presents a long-form transcription algorithm that sequentially transcribes 30-second segments 
+of audio and shifts the sliding window according to the timestamps predicted by the model. This style of sequential 
+inference is performed directly using the [`.generate`](https://huggingface.co/docs/transformers/model_doc/whisper#transformers.WhisperForConditionalGeneration.generate) 
+method in Transformers.
+
+The script [`run_eval.py`](run_eval.py) can be used to evaluate the trained student model on an arbitrary number of 
+long-form evaluation sets using the sequential algorithm. Since we don't have a long-form validation set for Hindi to hand, 
+in this example we'll evaluate the official Distil-Whisper model [`distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3) 
+on the TED-LIUM validation set:
+
+```bash
+#!/usr/bin/env bash
+
+accelerate launch run_eval.py \
+  --model_name_or_path "distil-whisper/distil-large-v3" \
+  --dataset_name "distil-whisper/tedlium-long-form" \
+  --dataset_config_name "all" \
+  --dataset_split_name "validation" \
+  --text_column_name "text" \
+  --batch_size 16 \
+  --dtype "bfloat16" \
+  --generation_max_length 256 \
+  --language "en" \
+  --attn_implementation "sdpa" \
+  --streaming
+
+```
+
+### Chunked Long Form
+
+Chunked long form evaluation runs on the premise that a single long audio file can be *chunked* into smaller segments and 
 inferred in parallel. The resulting transcriptions are then joined at the boundaries to give the final text prediction. 
 A small overlap (or *stride*) is used between adjacent segments to ensure a continuous transcription across chunks.
 
@@ -367,26 +416,24 @@ This style of chunked inference is performed using the [`pipeline`](https://hugg
 class, which provides a wrapper around the [`.generate`](https://huggingface.co/docs/transformers/model_doc/whisper#transformers.WhisperForConditionalGeneration.generate) 
 function for long-form inference.
 
-The script [`run_long_form_eval.py`](run_long_form_eval.py) can be used to evaluate the trained student model on an 
-arbitrary number of long-form evaluation sets. Since we don't have a long-form validation set for Hindi to hand, we'll
-evaluate the teacher model on the TED-LIUM validation set in this example:
+The script [`run_eval.py`](run_eval.py) can be used to evaluate the trained student model on an arbitrary number of 
+long-form evaluation sets using the pipeline class. Again, in this example we'll evaluate distil-large-v3 on the 
+TED-LIUM validation set:
 
 ```bash
 #!/usr/bin/env bash
 
-python run_long_form_eval.py \
+python run_eval.py \
   --model_name_or_path "openai/whisper-large-v3" \
   --dataset_name "distil-whisper/tedlium-long-form" \
   --dataset_config_name "all" \
   --dataset_split_name "validation" \
   --text_column_name "text" \
-  --output_dir "./" \
-  --per_device_eval_batch_size 64 \
-  --chunk_length_s 30 \
+  --use_pipeline \
+  --chunk_length_s 25.0 \
   --language "en" \
   --return_timestamps \
   --dtype "bfloat16" \
-  --report_to "wandb" \
   --streaming
 
 ```
@@ -395,6 +442,46 @@ The argument `chunk_length_s` controls the length of the chunked audio samples. 
 length of audio the student model was trained on. If unsure about what value of `chunk_length_s` is optimal for your case,
 it is recommended to run a *sweep* over all possible values. A template script for running a [WandB sweep](https://docs.wandb.ai/guides/sweeps) 
 can be found under [`run_chunk_length_s_sweep.yaml`](flax/long_form_transcription_scripts/run_chunk_length_s_sweep.yaml).
+
+### Speculative Decoding
+
+Speculative decoding, or assisted generation, relies on the premise that a faster, assistant model can be used to speed-up
+the generation of a slower, assistant model. Speculative decoding mathematically ensures that exactly the same outputs as 
+Whisper are obtained, while being ~2 times faster. This makes it the perfect drop-in replacement for existing Whisper 
+pipelines, since exactly the same outputs are guaranteed.
+
+Distil-Whisper checkpoints can be designed to be efficient assistant models to Whisper for speculative decoding. More precisely,
+by freezing the encoder during training, the distilled model can share the same encoder weights as Whisper during inference, since
+the encoder weights are un-changed. In doing so, only the distilled 2-layer decoder has to be loaded in addition to the 
+original Whisper model, which is approximately an 8% increase to the total parameter count, with up to 2x faster inference 
+for low batch sizes. For more details on speculative decoding, the reader is advised to refer to the following blog post:
+[Speculative Decoding for 2x Faster Whisper Inference](https://huggingface.co/blog/whisper-speculative-decoding).
+
+In the example below, we use our distilled model as an assistant to the large-v3 teacher model during inference:
+
+```bash
+#!/usr/bin/env bash
+
+python run_eval.py \
+  --model_name_or_path "openai/whisper-large-v3" \
+  --assistant_model_name_or_path "./" \
+  --dataset_name "../common_voice_16_1_hi_pseudo_labelled+google/fleurs" \
+  --dataset_config_name "default+hi_in" \
+  --dataset_split_name "test+test" \
+  --text_column_name "sentence+transcription" \
+  --batch_size 16 \
+  --dtype "bfloat16" \
+  --generation_max_length 256 \
+  --language "hi" \
+  --attn_implementation "sdpa" \
+  --streaming
+
+```
+
+We see that we achieve a WER of TODO%, the same as what we obtained with the large-v3 model, but with an RTFx of TODO, 
+a factor of TODO faster than using the large-v3 model alone. The RTFx value can be improved by training the student on 
+more data and for more training steps, since this will improve the number of predicted tokens that match the teacher 
+predictions.
 
 ## Overview of Training Methods
 

@@ -31,6 +31,7 @@ import evaluate
 import numpy as np
 import torch
 import transformers
+from accelerate.utils import is_tensorboard_available
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from tqdm import tqdm
 from transformers import (
@@ -48,12 +49,9 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.27.0.dev0")
+check_min_version("4.34.0.dev0")
 
-require_version(
-    "datasets>=1.18.0",
-    "To fix: pip install -r examples/flax/speech-recogintion/requirements.txt",
-)
+require_version("datasets>=2.14.6", "To fix: `pip install --upgrade datasets`")
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +83,6 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "If specified load weights from `variant` filename, *e.g.* pytorch_model.<variant>.bin. "},
     )
-    from_flax: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to load Flax weights into PyTorch model."},
-    )
     cache_dir: Optional[str] = field(
         default=None,
         metadata={"help": "Where to store the pretrained models downloaded from huggingface.co"},
@@ -112,13 +106,6 @@ class DataTrainingArguments:
         default=False,
         metadata={"help": "Whether to evaluate with Transformers pipeline"},
     )
-    use_sequential: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to evaluate with Whisper sequential long-form generation. "
-            "If `False` and `use_pipeline=False`, the short-form generation is performed"
-        },
-    )
     chunk_length_s: float = field(
         default=30.0, metadata={"help": "Chunk length to use when `use_pipeline` is enabled."}
     )
@@ -128,7 +115,23 @@ class DataTrainingArguments:
             "help": "Whether to decode with timestamps. This can help for improved WER for long form evaluation."
         },
     )
-    attn_type: Optional[str] = field(
+    language: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Language for multilingual evaluation. This argument should be set for multilingual evaluation "
+                "only. For English speech recognition, it should be left as `None`."
+            )
+        },
+    )
+    task: str = field(
+        default="transcribe",
+        metadata={
+            "help": "Task, either `transcribe` for speech recognition or `translate` for speech translation."
+            "This argument should be set for multilingual evaluation only. For English speech recognition, it should be left as `None`."
+        },
+    )
+    attn_implementation: Optional[str] = field(
         default=None,
         metadata={"help": "Which attn type to use: ['eager', 'sdpa', 'flash_attention_2']"},
     )
@@ -314,13 +317,13 @@ def convert_dataset_str_to_list(
             ds_name = dataset_names[i]
             dataset_names[i] = f"distil-whisper/{ds_name}" if "/" not in ds_name else ds_name
 
-        dataset_config_names = dataset_config_names.split("+")
+        dataset_config_names = dataset_config_names.split("+") if dataset_config_names is not None else None
         splits = splits.split("+") if splits is not None else None
         text_column_names = text_column_names.split("+") if text_column_names is not None else None
         dataset_hours = dataset_hours.split("+") if dataset_hours is not None else None
 
     # basic checks to ensure we've got the right number of datasets/configs/splits/columns/probs
-    if len(dataset_names) != len(dataset_config_names):
+    if dataset_config_names is not None and len(dataset_names) != len(dataset_config_names):
         raise ValueError(
             f"Ensure one config is passed for each dataset, got {len(dataset_names)} datasets and"
             f" {len(dataset_config_names)} configs."
@@ -347,6 +350,9 @@ def convert_dataset_str_to_list(
     else:
         dataset_hours = [None] * len(dataset_names)
 
+    dataset_config_names = (
+        dataset_config_names if dataset_config_names is not None else ["default" for _ in range(len(dataset_names))]
+    )
     text_column_names = (
         text_column_names if text_column_names is not None else ["text" for _ in range(len(dataset_names))]
     )
@@ -404,28 +410,21 @@ def main():
         generation_arguments = {
             "torch_version": str(torch.__version__),
             "transformers_version": str(transformers.__version__),
-            "attn_type": data_args.attn_type,
+            "attn_implementation": data_args.attn_implementation,
             "model_name_or_path": data_args.model_name_or_path,
             "subfolder": data_args.subfolder,
             "assistant_model_name_or_path": data_args.assistant_model_name_or_path,
             "seed": data_args.seed,
             "batch_size": data_args.batch_size,
             "num_beams": data_args.num_beams,
-            "use_pipeline": data_args.use_pipeline,
             "return_timestamps": data_args.return_timestamps,
+            "condition_on_prev_tokens": data_args.condition_on_prev_tokens,
+            "temperature_fallback": data_args.temperature_fallback,
+            "logprob_threshold": data_args.logprob_threshold,
+            "no_speech_threshold": data_args.no_speech_threshold,
+            "use_pipeline": data_args.use_pipeline,
+            "chunk_length_s": data_args.chunk_length_s
         }
-
-        if data_args.use_pipeline:
-            generation_arguments["chunk_length_s"] = data_args.chunk_length_s
-        elif data_args.use_sequential:
-            generation_arguments.update(
-                {
-                    "condition_on_prev_tokens": data_args.condition_on_prev_tokens,
-                    "temperature_fallback": data_args.temperature_fallback,
-                    "logprob_threshold": data_args.logprob_threshold,
-                    "no_speech_threshold": data_args.no_speech_threshold,
-                }
-            )
 
         # Set up wandb run
         wandb_logger.init(
@@ -491,13 +490,12 @@ def main():
         data_args.model_name_or_path,
         subfolder=data_args.subfolder,
         torch_dtype=dtype,
-        attn_implementation=data_args.attn_type,
-        low_cpu_mem_usage=is_accelerate_available() and not data_args.from_flax,
-        from_flax=data_args.from_flax,
+        attn_implementation=data_args.attn_implementation,
+        low_cpu_mem_usage=is_accelerate_available(),
         cache_dir=data_args.cache_dir,
         variant=data_args.model_variant,
     )
-    model.to("cuda", dtype=dtype)
+    model.to("cuda:0", dtype=dtype)
 
     model_pipeline = None
     if data_args.use_pipeline:
@@ -520,18 +518,16 @@ def main():
             assistant_model = WhisperForConditionalGeneration.from_pretrained(
                 data_args.assistant_model_name_or_path,
                 torch_dtype=dtype,
-                attn_implementation=data_args.attn_type,
-                low_cpu_mem_usage=is_accelerate_available() and not data_args.from_flax,
-                from_flax=data_args.from_flax,
+                attn_implementation=data_args.attn_implementation,
+                low_cpu_mem_usage=is_accelerate_available(),
                 cache_dir=data_args.cache_dir,
             )
         else:
             assistant_model = WhisperForCausalLM.from_pretrained(
                 data_args.assistant_model_name_or_path,
                 torch_dtype=dtype,
-                attn_implementation=data_args.attn_type,
-                low_cpu_mem_usage=is_accelerate_available() and not data_args.from_flax,
-                from_flax=data_args.from_flax,
+                attn_implementation=data_args.attn_implementation,
+                low_cpu_mem_usage=is_accelerate_available(),
                 cache_dir=data_args.cache_dir,
             )
 
@@ -560,16 +556,15 @@ def main():
         audio = [sample["array"].astype(np.float32) for sample in batch[audio_column_name]]
 
         if model_pipeline is None:
-            if data_args.use_sequential:
-                inputs = processor.feature_extractor(
-                    audio,
-                    sampling_rate=sampling_rate,
-                    return_tensors="pt",
-                    truncation=False,
-                    padding="longest",
-                    return_attention_mask=True,
-                )
-            else:
+            inputs = processor.feature_extractor(
+                audio,
+                sampling_rate=sampling_rate,
+                return_tensors="pt",
+                truncation=False,
+                padding="longest",
+                return_attention_mask=True,
+            )
+            if inputs.input_features.shape[-1] < 3000:
                 inputs = processor.feature_extractor(
                     audio,
                     sampling_rate=sampling_rate,
@@ -630,38 +625,43 @@ def main():
         "num_beams": data_args.num_beams,
         "top_k": 0,
     }
-    if data_args.use_sequential:
-        gen_kwargs.update(
-            {
-                "condition_on_prev_tokens": data_args.condition_on_prev_tokens,
-                "compression_ratio_threshold": data_args.compression_ratio_threshold,
-                "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if data_args.temperature_fallback else 0,
-                "logprob_threshold": data_args.logprob_threshold,
-                "no_speech_threshold": data_args.no_speech_threshold,
-            }
-        )
-    else:
-        logger.info("Running short-form generation. For sequential long-form generation, set `use_sequential=False`.")
 
     if hasattr(model.generation_config, "is_multilingual") and model.generation_config.is_multilingual:
-        gen_kwargs["language"] = "<|en|>"
-        gen_kwargs["task"] = "transcribe"
+        gen_kwargs["language"] = data_args.language
+        gen_kwargs["task"] = data_args.task
+    elif data_args.language is not None:
+        raise ValueError(
+            "Setting language token for an English-only checkpoint is not permitted. The language argument should "
+            "only be set for multilingual checkpoints."
+        )
 
     if assistant_model is not None:
         gen_kwargs["assistant_model"] = assistant_model
 
     if data_args.prompt_text is not None:
-        gen_kwargs["prompt_ids"] = processor.get_prompt_ids(data_args.prompt_text, return_tensors="pt").to("cuda")
+        gen_kwargs["prompt_ids"] = processor.get_prompt_ids(data_args.prompt_text, return_tensors="pt").to("cuda:0")
+
+    long_form_gen_kwargs = {
+        "condition_on_prev_tokens": data_args.condition_on_prev_tokens,
+        "compression_ratio_threshold": data_args.compression_ratio_threshold,
+        "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if data_args.temperature_fallback else 0,
+        "logprob_threshold": data_args.logprob_threshold,
+        "no_speech_threshold": data_args.no_speech_threshold,
+    }
 
     def benchmark(batch):
         if model_pipeline is None:
             inputs = torch.stack(batch["input_features"], dim=0).cuda()
             attention_mask = torch.stack(batch["attention_mask"], dim=0).cuda()
-            inner_batch_size = inputs.shape[0]
-            set_seed(data_args.seed)
+            inner_batch_size, num_mels, seq_len = inputs.shape
+            if seq_len == 3000:
+                batch_gen_kwargs = gen_kwargs
+            else:
+                batch_gen_kwargs = {**gen_kwargs, **long_form_gen_kwargs}
 
+            set_seed(data_args.seed)
             start_time = time.time()
-            output_ids = model.generate(inputs, attention_mask=attention_mask, **gen_kwargs)
+            output_ids = model.generate(inputs, attention_mask=attention_mask, **batch_gen_kwargs)
             batch["time"] = inner_batch_size * [(time.time() - start_time) / inner_batch_size]
 
             batch["transcription"] = processor.batch_decode(
