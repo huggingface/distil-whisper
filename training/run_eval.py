@@ -620,7 +620,6 @@ def main():
 
     gen_kwargs = {
         "max_length": data_args.generation_max_length,
-        "max_initial_timestamp_index": 50,
         "return_timestamps": data_args.return_timestamps,
         "num_beams": data_args.num_beams,
         "top_k": 0,
@@ -653,6 +652,7 @@ def main():
         if model_pipeline is None:
             inputs = torch.stack(batch["input_features"], dim=0).cuda()
             attention_mask = torch.stack(batch["attention_mask"], dim=0).cuda()
+            # automatically use long-form args if required
             inner_batch_size, num_mels, seq_len = inputs.shape
             if seq_len == 3000:
                 batch_gen_kwargs = gen_kwargs
