@@ -61,7 +61,7 @@ huggingface-cli login
 ```
 And then enter an authentication token from https://huggingface.co/settings/tokens. Create a new token if you do not have one already. You should make sure that this token has "write" privileges.
 
-To confirm that you have a working environment, first accept the terms of use of the Common Voice 13 dataset on the Hub: https://huggingface.co/datasets/mozilla-foundation/common_voice_13_0 
+To confirm that you have a working environment, first accept the terms of use of the Common Voice 16.1 dataset on the Hub: https://huggingface.co/datasets/mozilla-foundation/common_voice_16_1 
 
 You can run the following code cell to stream one sample of data from the Common Voice dataset, and check that you can 
 perform inference using the "tiny" Whisper model:
@@ -75,7 +75,7 @@ processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
 
 model.to("cuda")
 
-common_voice = load_dataset("mozilla-foundation/common_voice_13_0", "en", split="validation", streaming=True)
+common_voice = load_dataset("mozilla-foundation/common_voice_16_1", "en", split="validation", streaming=True)
 common_voice = common_voice.cast_column("audio", Audio(sampling_rate=processor.feature_extractor.sampling_rate))
 
 inputs = processor(next(iter(common_voice))["audio"]["array"], sampling_rate=16000, return_tensors="pt")
@@ -85,7 +85,7 @@ generated_ids = model.generate(input_features.to("cuda"), max_new_tokens=128)
 pred_text = processor.decode(generated_ids[0], skip_special_tokens=True)
 
 print("Pred text:", pred_text)
-print("Environment set up successful?", generated_ids.shape[-1] == 19)
+print("Environment set up successful?", generated_ids.shape[-1] == 20)
 ```
 
 ## 1. Pseudo-Labelling
