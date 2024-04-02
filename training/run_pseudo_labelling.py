@@ -16,12 +16,11 @@
 """
 Pseudo-labelling audio data using the Whisper model in preparation for distillation.
 """
-import csv
-
 # You can also adapt this script for your own pseudo-labelling tasks. Pointers for this are left as comments.
+
+import csv
 import logging
 import os
-import string
 import sys
 import time
 import warnings
@@ -42,7 +41,7 @@ from datasets import (
     IterableDatasetDict,
     load_dataset,
 )
-from huggingface_hub import HfFolder, Repository, create_repo, get_full_repo_name
+from huggingface_hub import HfFolder, create_repo, get_full_repo_name, upload_folder, snapshot_download
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
@@ -351,7 +350,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         # dataloader returns a list of features which we convert to a dict
         input_features = {model_input_name: [feature[model_input_name] for feature in features]}
         label_features = {"input_ids": [feature["labels"] for feature in features]}
-        file_ids = [feature["file_id"] for feature in features]
 
         # reformat list to dict and set to pytorch format
         batch = self.processor.feature_extractor.pad(
@@ -376,8 +374,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             labels = labels[:, 1:]
 
         batch["labels"] = labels
-        batch["file_ids"] = file_ids
-
         return batch
 
 
@@ -497,25 +493,15 @@ def main():
 
     data_splits = data_args.dataset_split_name.split("+")
     for split in data_splits:
-        if data_args.streaming:
-            raw_datasets[split] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=split,
-                cache_dir=data_args.dataset_cache_dir,
-                token=token,
-                streaming=True,
-            )
-        else:
-            raw_datasets[split] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=split,
-                cache_dir=data_args.dataset_cache_dir,
-                token=token,
-                streaming=False,
-                num_proc=data_args.preprocessing_num_workers,
-            )
+        raw_datasets[split] = load_dataset(
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            split=split,
+            cache_dir=data_args.dataset_cache_dir,
+            token=token,
+            streaming=data_args.streaming,
+            num_proc=data_args.preprocessing_num_workers if not data_args.streaming else None,
+        )
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
@@ -685,7 +671,7 @@ def main():
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
-    if data_args.concatenate_audio and not data_args.streaming:
+    if data_args.concatenate_audio and not data_args.streaming and accelerator.main_process_first():
         raw_datasets = raw_datasets.map(
             concatenate_dataset,
             batched=True,
@@ -714,7 +700,7 @@ def main():
             batch_size=preprocessing_batch_size,
             num_proc=num_workers,
         )
-    else:
+    elif data_args.concatenate_audio and data_args.streaming:
         raise ValueError(
             "Streaming mode is not yet compatible with concatenating audios to `max_duration_in_seconds`."
             "Either set `--streaming=False` and download the audios locally, or open an issue on the Distil-Whisper repo to request this feature."
@@ -730,15 +716,15 @@ def main():
         # process targets
         input_str = batch[text_column_name]
         batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
-
-        # record the id of the sample as token ids
-        batch["file_id"] = batch[id_column_name]
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
-    if data_args.streaming:
+    file_ids_dataset = IterableDatasetDict() if data_args.streaming else DatasetDict()
+    for split in raw_datasets:
+        file_ids_dataset[split] = raw_datasets[split][id_column_name]
+    if data_args.streaming and accelerator.main_process_first():
         vectorized_datasets = raw_datasets.map(prepare_dataset, remove_columns=raw_datasets_features)
-    else:
+    elif accelerator.main_process_first():
         vectorized_datasets = raw_datasets.map(
             prepare_dataset,
             remove_columns=raw_datasets_features,
@@ -765,30 +751,29 @@ def main():
 
     # Handle the repository creation
     output_dir = training_args.output_dir
-    if training_args.push_to_hub:
-        if training_args.hub_model_id is None:
-            repo_name = get_full_repo_name(
-                Path(output_dir).absolute().name,
-                token=token,
-            )
-        else:
-            repo_name = training_args.hub_model_id
-        create_repo(repo_name, exist_ok=True, token=token, repo_type="dataset", private=data_args.private_dataset)
-        repo = Repository(
-            output_dir,
-            clone_from=repo_name,
-            token=token,
-            repo_type="dataset",
-        )
-        # Ensure large txt files can be pushed to the Hub with git-lfs
-        with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
-            git_lfs_extensions = f.read()
-            if "*.csv" not in git_lfs_extensions:
-                f.write("*.csv filter=lfs diff=lfs merge=lfs -text")
-    else:
-        # this is where we'll save our transcriptions
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    if accelerator.is_main_process:
+        if training_args.push_to_hub:
+            if training_args.hub_model_id is None:
+                repo_name = get_full_repo_name(
+                    Path(output_dir).absolute().name,
+                    token=training_args.hub_token,
+                )
+            else:
+                repo_name = training_args.hub_model_id
+            create_repo(repo_name, repo_type="dataset", exist_ok=True, token=training_args.hub_token)
+            snapshot_download(repo_id=repo_name, local_dir=output_dir)
+
+            # Ensure large txt files can be pushed to the Hub with git-lfs
+            with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
+                git_lfs_extensions = f.read()
+                if "*.csv" not in git_lfs_extensions:
+                    f.write("*.csv filter=lfs diff=lfs merge=lfs -text")
+
+        elif output_dir is not None:
+            # this is where we'll save our transcriptions
+            os.makedirs(output_dir, exist_ok=True)
+
+    accelerator.wait_for_everyone()
 
     # 8. Load Metric
     metric = evaluate.load("wer")
@@ -857,7 +842,9 @@ def main():
                 "task": data_args.task,
             }
         )
+    # remove any preset forced decoder ids since these are deprecated
     model.generation_config.forced_decoder_ids = None
+    model.config.forced_decoder_ids = None
 
     # 15. Prepare everything with accelerate
     model = accelerator.prepare(model)
@@ -877,6 +864,11 @@ def main():
             num_workers=dataloader_num_workers,
             pin_memory=True,
         )
+        file_loader = DataLoader(
+            file_ids_dataset[split],
+            batch_size=per_device_eval_batch_size * accelerator.num_processes,
+            num_workers = dataloader_num_workers,
+        )
 
         eval_loader = accelerator.prepare(eval_loader)
         batches = tqdm(eval_loader, desc=f"Evaluating {split}...", disable=not accelerator.is_local_main_process)
@@ -885,16 +877,13 @@ def main():
         split = split.replace(".", "-").split("/")[-1]
         output_csv = os.path.join(output_dir, f"{split}-transcription.csv")
 
-        for step, batch in enumerate(batches):
-            file_ids = batch.pop("file_ids")
+        for step, (batch, file_ids) in enumerate(zip(batches, file_loader)):
             # Generate predictions and pad to max generated length
             generate_fn = model.module.generate if accelerator.num_processes > 1 else model.generate
             generated_ids = generate_fn(batch["input_features"].to(dtype=torch_dtype), **gen_kwargs)
             generated_ids = accelerator.pad_across_processes(generated_ids, dim=1, pad_index=tokenizer.pad_token_id)
             # Gather all predictions and targets
-            file_ids, generated_ids, labels = accelerator.gather_for_metrics(
-                (file_ids, generated_ids, batch["labels"])
-            )
+            generated_ids, labels = accelerator.gather_for_metrics((generated_ids, batch["labels"]))
             eval_preds.extend(generated_ids.cpu().numpy())
             eval_labels.extend(labels.cpu().numpy())
             eval_ids.extend(file_ids)
@@ -916,9 +905,11 @@ def main():
                     writer.writerows(csv_data)
 
                 if training_args.push_to_hub and accelerator.is_main_process:
-                    repo.push_to_hub(
+                    upload_folder(
+                        folder_path=output_dir,
+                        repo_id=repo_name,
+                        repo_type="dataset",
                         commit_message=f"Saving transcriptions for split {split} step {step}.",
-                        blocking=False,
                     )
 
         accelerator.wait_for_everyone()
@@ -965,7 +956,7 @@ def main():
         # Print metrics
         logger.info(wer_desc)
 
-        if not data_args.streaming and accelerator.is_main_process:
+        if not data_args.streaming and accelerator.main_process_first():
             raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", pred_str)
             raw_datasets[split] = raw_datasets[split].add_column("eval_preds", eval_preds)
 
@@ -1000,9 +991,11 @@ def main():
         eval_step_with_save(split=split)
         accelerator.wait_for_everyone()
         if training_args.push_to_hub and accelerator.is_main_process:
-            repo.push_to_hub(
+            upload_folder(
+                folder_path=output_dir,
+                repo_id=repo_name,
+                repo_type="dataset",
                 commit_message=f"Saving final transcriptions for split {split.replace('.', '-').split('/')[-1]}",
-                blocking=False,
             )
     if not data_args.streaming and accelerator.is_main_process:
         raw_datasets.save_to_disk(output_dir, num_proc=num_workers)
