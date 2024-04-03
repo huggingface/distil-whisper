@@ -14,4 +14,3 @@ line-length = 119
 
 [tool.ruff.isort]
 lines-after-imports = 2
-known-first-party = ["distil_whisper"]
