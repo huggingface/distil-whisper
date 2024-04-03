@@ -31,7 +31,6 @@ import evaluate
 import numpy as np
 import torch
 import transformers
-from accelerate.utils import is_tensorboard_available
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from tqdm import tqdm
 from transformers import (
@@ -423,7 +422,7 @@ def main():
             "logprob_threshold": data_args.logprob_threshold,
             "no_speech_threshold": data_args.no_speech_threshold,
             "use_pipeline": data_args.use_pipeline,
-            "chunk_length_s": data_args.chunk_length_s
+            "chunk_length_s": data_args.chunk_length_s,
         }
 
         # Set up wandb run

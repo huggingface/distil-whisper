@@ -122,9 +122,9 @@ def init_student_model_from_teacher(
         {
             "encoder_layers": encoder_layers if encoder_layers is not None else teacher_encoder_layers,
             "decoder_layers": decoder_layers,
-            "max_source_positions": max_source_positions
-            if max_source_positions is not None
-            else student_config.max_source_positions,
+            "max_source_positions": (
+                max_source_positions if max_source_positions is not None else student_config.max_source_positions
+            ),
         }
     )
 

@@ -40,10 +40,10 @@ git clone https://github.com/<your GitHub handle>/distil-whisper.git
 cd distil-whisper
 git remote add upstream https://github.com/huggingface/distil-whisper.git
 ```
-4. pip install the required packages from the [requirements.txt](#requirements) file:
+4. pip install the required packages from the [setup.py](./setup.py) file:
 ```bash
 cd training
-pip install -r requirements.txt
+pip install -e .
 cd ../..
 ```
 

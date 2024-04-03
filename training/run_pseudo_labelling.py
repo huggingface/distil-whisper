@@ -41,7 +41,7 @@ from datasets import (
     IterableDatasetDict,
     load_dataset,
 )
-from huggingface_hub import HfFolder, create_repo, get_full_repo_name, upload_folder, snapshot_download
+from huggingface_hub import HfFolder, create_repo, get_full_repo_name, snapshot_download, upload_folder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
@@ -53,7 +53,7 @@ from transformers import (
     WhisperProcessor,
     WhisperTokenizerFast,
 )
-from transformers.models.whisper.english_normalizer import EnglishTextNormalizer, BasicTextNormalizer
+from transformers.models.whisper.english_normalizer import BasicTextNormalizer, EnglishTextNormalizer
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -132,19 +132,18 @@ class ModelArguments:
         default=None,
         metadata={
             "help": (
-            "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
-            "1. `eager` or `None`: default Transformers attention implementation.\n"
-            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
-            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-        )
+                "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
+                "1. `eager` or `None`: default Transformers attention implementation.\n"
+                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
+                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+            )
         },
     )
     attn_type: Optional[str] = field(
         default=None,
-        metadata={
-            "help": "Deprecated. Use `attn_implementation` instead."
-        },
+        metadata={"help": "Deprecated. Use `attn_implementation` instead."},
     )
+
     def __post_init__(self):
         if self.attn_type is not None and self.attn_implementation is None:
             # set attn_implementation in a backwards compatible way
@@ -161,9 +160,13 @@ class ModelArguments:
                     "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
                     "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
                 )
-            warnings.warn(f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`.")
+            warnings.warn(
+                f"Argument `--attn_type` is deprecated. Use `--attn_implementation` instead. Inferring `--attn_implementation={self.attn_implementation} from argument `--attn_type={self.attn_type}`."
+            )
         elif self.attn_type is not None and self.attn_implementation is not None:
-            raise ValueError("`--attn_type` and `--attn_implementation` are both specified. Only the argument `--attn_implementation`.")
+            raise ValueError(
+                "`--attn_type` and `--attn_implementation` are both specified. Only the argument `--attn_implementation`."
+            )
 
 
 @dataclass
@@ -299,6 +302,7 @@ class DataTrainingArguments:
                 "on the Hugging Face Hub: https://huggingface.co/openai/whisper-large-v2/discussions/100. "
                 "You should either omit the argument `--decode_token_ids`, or set it to True explicitly."
             )
+
 
 def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.ndarray:
     """
@@ -602,7 +606,9 @@ def main():
     id_column_name = data_args.id_column_name
     speaker_id_column_name = data_args.speaker_id_column_name
     normalizer = (
-        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer()
+        if data_args.language is not None
+        else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
 
     timestamp_position = 3 if is_multilingual else 1
@@ -677,11 +683,14 @@ def main():
             batched=True,
             batch_size=preprocessing_batch_size,
             num_proc=num_workers,
-            remove_columns=set(raw_datasets_features) - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
+            remove_columns=set(raw_datasets_features)
+            - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
             desc="Concatenating dataset...",
         )
 
-        raw_datasets = raw_datasets.cast_column(audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate))
+        raw_datasets = raw_datasets.cast_column(
+            audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate)
+        )
         pretty_name = data_args.dataset_name.split("/")[-1]
 
         def postprocess_ids(speaker_ids, indices):
@@ -867,7 +876,7 @@ def main():
         file_loader = DataLoader(
             file_ids_dataset[split],
             batch_size=per_device_eval_batch_size * accelerator.num_processes,
-            num_workers = dataloader_num_workers,
+            num_workers=dataloader_num_workers,
         )
 
         eval_loader = accelerator.prepare(eval_loader)
@@ -891,10 +900,12 @@ def main():
             if step % training_args.logging_steps == 0 and step > 0:
                 batches.write(f"Saving transcriptions for split {split} step {step}")
                 accelerator.wait_for_everyone()
-                pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)):]
+                pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)) :]
                 pred_ids = filter_eot_tokens(pred_ids)
                 pred_str.extend(
-                    tokenizer.batch_decode(pred_ids, skip_special_tokens=False,decode_with_timestamps=return_timestamps)
+                    tokenizer.batch_decode(
+                        pred_ids, skip_special_tokens=False, decode_with_timestamps=return_timestamps
+                    )
                 )
                 csv_data = [[eval_ids[i], pred_str[i]] for i in range(len(eval_preds))]
 
@@ -939,7 +950,7 @@ def main():
                 prefix=split,
             )
         else:
-            pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)):]
+            pred_ids = eval_preds[-(len(eval_preds) - len(pred_str)) :]
             pred_ids = filter_eot_tokens(pred_ids)
             pred_str.extend(
                 tokenizer.batch_decode(pred_ids, skip_special_tokens=False, decode_with_timestamps=return_timestamps)

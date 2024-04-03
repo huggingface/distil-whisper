@@ -130,13 +130,14 @@ class ModelArguments:
         default=None,
         metadata={
             "help": (
-            "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
-            "1. `eager` or `None`: default Transformers attention implementation.\n"
-            "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
-            "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
-        )
+                "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
+                "1. `eager` or `None`: default Transformers attention implementation.\n"
+                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
+                "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+            )
         },
     )
+
     def __post_init__(self):
         if self.attn_implementation not in [None, "eager", "sdpa", "flash_attention_2"]:
             raise ValueError(
@@ -854,9 +855,11 @@ def main():
     if training_args.do_eval:
         dataset_names_dict = convert_dataset_str_to_list(
             data_args.eval_dataset_name if data_args.eval_dataset_name else data_args.train_dataset_name,
-            data_args.eval_dataset_config_name
-            if data_args.eval_dataset_config_name
-            else data_args.train_dataset_config_name,
+            (
+                data_args.eval_dataset_config_name
+                if data_args.eval_dataset_config_name
+                else data_args.train_dataset_config_name
+            ),
             splits=data_args.eval_split_name,
             text_column_names=data_args.eval_text_column_name,
         )
@@ -1050,7 +1053,9 @@ def main():
 
     metric = evaluate.load("wer")
     normalizer = (
-        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer()
+        if data_args.language is not None
+        else EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     )
     wer_threshold = data_args.wer_threshold
     use_pseudo_labels = data_args.use_pseudo_labels
@@ -1518,7 +1523,6 @@ def main():
             num_workers=dataloader_num_workers,
             prefetch_factor=prefetch_factor,
             pin_memory=training_args.dataloader_pin_memory,
-
         )
         train_dataloader = accelerator.prepare(train_dataloader)
         if hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDataset):
