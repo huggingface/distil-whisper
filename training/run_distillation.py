@@ -1098,11 +1098,12 @@ def main():
     )
 
     if wer_threshold is not None and use_pseudo_labels:
-        raw_datasets["train"] = (
-            filter_by_wer_threshold(num_proc=num_workers, desc="filtering train dataset by wer")
-            if not data_args.streaming
-            else filter_by_wer_threshold()
-        )
+        with accelerator.main_process_first():
+            raw_datasets["train"] = (
+                filter_by_wer_threshold(num_proc=num_workers, desc="filtering train dataset by wer")
+                if not data_args.streaming
+                else filter_by_wer_threshold()
+            )
 
     # 10.4: pre-process training/evaluation datasets
     def prepare_train_dataset(batch):
@@ -1193,7 +1194,7 @@ def main():
             batched=True,
             batch_size=data_args.preprocessing_batch_size,
         )
-        if accelerator.is_main_process:
+        with accelerator.main_process_first():
             vectorized_datasets["train"] = (
                 map_fn_train(num_proc=num_workers, desc="preprocess train dataset")
                 if not data_args.streaming
@@ -1205,7 +1206,7 @@ def main():
             map_fn_eval = partial(
                 raw_datasets[eval_split].map, function=prepare_eval_dataset, remove_columns=raw_datasets_eval_features
             )
-            if accelerator.is_main_process:
+            with accelerator.main_process_first():
                 vectorized_datasets[eval_split] = (
                     map_fn_eval(num_proc=num_workers, desc="preprocess eval dataset")
                     if not data_args.streaming
@@ -1219,7 +1220,7 @@ def main():
     filter_by_audio_fn = partial(
         vectorized_datasets.filter, function=is_audio_in_length_range, input_columns=["input_length"]
     )
-    if accelerator.is_main_process:
+    with accelerator.main_process_first():
         vectorized_datasets = (
             filter_by_audio_fn(num_proc=num_workers, desc="filtering train dataset by audio length")
             if not data_args.streaming
@@ -1233,7 +1234,7 @@ def main():
     filter_by_labels_fn = partial(
         vectorized_datasets.filter, function=is_labels_in_length_range, input_columns=["labels"]
     )
-    if accelerator.is_main_process:
+    with accelerator.main_process_first():
         vectorized_datasets = (
             filter_by_labels_fn(num_proc=num_workers, desc="filtering train dataset")
             if not data_args.streaming
