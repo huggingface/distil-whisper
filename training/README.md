@@ -246,11 +246,11 @@ to any number of training datasets.
 accelerate launch run_distillation.py \
   --model_name_or_path "./distil-large-v3-init" \
   --teacher_model_name_or_path "openai/whisper-large-v3" \
-  --train_dataset_name "./common_voice_16_1_hi_pseudo_labelled+./common_voice_16_1_hi_pseudo_labelled" \
+  --train_dataset_name "../common_voice_16_1_hi_pseudo_labelled+../common_voice_16_1_hi_pseudo_labelled" \
   --train_split_name "train+validation" \
   --text_column_name "sentence+sentence" \
   --train_dataset_samples "7+4" \
-  --eval_dataset_name "./common_voice_16_1_hi_pseudo_labelled" \
+  --eval_dataset_name "../common_voice_16_1_hi_pseudo_labelled" \
   --eval_split_name "test" \
   --eval_text_column_name "sentence" \
   --eval_steps 1000 \
