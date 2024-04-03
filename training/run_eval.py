@@ -544,8 +544,8 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     audio_column_name = data_args.audio_column_name
     normalizer = (
-        BasicTextNormalizer() if data_args.language is not None else EnglishTextNormalizer(
-            processor.tokenizer.english_spelling_normalizer)
+        BasicTextNormalizer() if data_args.language is not None
+        else EnglishTextNormalizer(processor.tokenizer.english_spelling_normalizer)
     )
     sampling_rate = processor.feature_extractor.sampling_rate
 
