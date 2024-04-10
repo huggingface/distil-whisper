@@ -497,15 +497,16 @@ def main():
 
     data_splits = data_args.dataset_split_name.split("+")
     for split in data_splits:
-        raw_datasets[split] = load_dataset(
-            data_args.dataset_name,
-            data_args.dataset_config_name,
-            split=split,
-            cache_dir=data_args.dataset_cache_dir,
-            token=token,
-            streaming=data_args.streaming,
-            num_proc=data_args.preprocessing_num_workers if not data_args.streaming else None,
-        )
+        with accelerator.main_process_first():
+            raw_datasets[split] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=split,
+                cache_dir=data_args.dataset_cache_dir,
+                token=token,
+                streaming=data_args.streaming,
+                num_proc=data_args.preprocessing_num_workers if not data_args.streaming else None,
+            )
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
@@ -522,7 +523,7 @@ def main():
             " correct text column - one of"
             f" {', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
-
+    
     # 7. Load pretrained model, tokenizer, and feature extractor
     config = WhisperConfig.from_pretrained(
         (model_args.config_name if model_args.config_name else model_args.model_name_or_path),
@@ -677,16 +678,17 @@ def main():
         return batch
 
     raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
-    if data_args.concatenate_audio and not data_args.streaming and accelerator.main_process_first():
-        raw_datasets = raw_datasets.map(
-            concatenate_dataset,
-            batched=True,
-            batch_size=preprocessing_batch_size,
-            num_proc=num_workers,
-            remove_columns=set(raw_datasets_features)
-            - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
-            desc="Concatenating dataset...",
-        )
+    if data_args.concatenate_audio and not data_args.streaming:
+        with accelerator.main_process_first():
+            raw_datasets = raw_datasets.map(
+                concatenate_dataset,
+                batched=True,
+                batch_size=preprocessing_batch_size,
+                num_proc=num_workers,
+                remove_columns=set(raw_datasets_features)
+                - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
+                desc="Concatenating dataset...",
+            )
 
         raw_datasets = raw_datasets.cast_column(
             audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate)
@@ -699,16 +701,17 @@ def main():
                 formatted_idx = f"{pretty_name}-{speaker}-{idx}" if speaker is not None else f"{pretty_name}-{idx}"
                 speaker_ids_formatted.append(formatted_idx)
             return {id_column_name: speaker_ids_formatted}
-
-        raw_datasets = raw_datasets.map(
-            postprocess_ids,
-            input_columns=[id_column_name],
-            with_indices=True,
-            desc="Setting sample idxs...",
-            batched=True,
-            batch_size=preprocessing_batch_size,
-            num_proc=num_workers,
-        )
+        
+        with accelerator.main_process_first():
+            raw_datasets = raw_datasets.map(
+                postprocess_ids,
+                input_columns=[id_column_name],
+                with_indices=True,
+                desc="Setting sample idxs...",
+                batched=True,
+                batch_size=preprocessing_batch_size,
+                num_proc=num_workers,
+            )
     elif data_args.concatenate_audio and data_args.streaming:
         raise ValueError(
             "Streaming mode is not yet compatible with concatenating audios to `max_duration_in_seconds`."
@@ -731,15 +734,17 @@ def main():
     file_ids_dataset = IterableDatasetDict() if data_args.streaming else DatasetDict()
     for split in raw_datasets:
         file_ids_dataset[split] = raw_datasets[split][id_column_name]
-    if data_args.streaming and accelerator.main_process_first():
-        vectorized_datasets = raw_datasets.map(prepare_dataset, remove_columns=raw_datasets_features)
-    elif accelerator.main_process_first():
-        vectorized_datasets = raw_datasets.map(
-            prepare_dataset,
-            remove_columns=raw_datasets_features,
-            num_proc=num_workers,
-            desc="preprocess dataset",
-        )
+    if data_args.streaming:
+        with accelerator.main_process_first():
+            vectorized_datasets = raw_datasets.map(prepare_dataset, remove_columns=raw_datasets_features)
+    else:
+        with accelerator.main_process_first():
+            vectorized_datasets = raw_datasets.map(
+                prepare_dataset,
+                remove_columns=raw_datasets_features,
+                num_proc=num_workers,
+                desc="preprocess dataset",
+            )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -967,7 +972,7 @@ def main():
         # Print metrics
         logger.info(wer_desc)
 
-        if not data_args.streaming and accelerator.main_process_first():
+        if not data_args.streaming:
             raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", pred_str)
             raw_datasets[split] = raw_datasets[split].add_column("eval_preds", eval_preds)
 
@@ -982,15 +987,16 @@ def main():
                         concatenated_prev.append(prompt_ids)
                 return {"condition_on_prev": concatenated_prev}
 
-            raw_datasets[split] = raw_datasets[split].map(
-                add_concatenated_text,
-                input_columns=["eval_preds", "condition_on_prev"],
-                remove_columns=["eval_preds"],
-                desc="Setting condition on prev...",
-                batched=True,
-                batch_size=preprocessing_batch_size,
-                num_proc=num_workers,
-            )
+            with accelerator.main_process_first():
+                raw_datasets[split] = raw_datasets[split].map(
+                    add_concatenated_text,
+                    input_columns=["eval_preds", "condition_on_prev"],
+                    remove_columns=["eval_preds"],
+                    desc="Setting condition on prev...",
+                    batched=True,
+                    batch_size=preprocessing_batch_size,
+                    num_proc=num_workers,
+                )
 
     logger.info("***** Running Labelling *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
