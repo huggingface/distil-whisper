@@ -1671,7 +1671,15 @@ def main():
                     # un-wrap student model for save
                     student_model = accelerator.unwrap_model(student_model)
                     student_model.save_pretrained(training_args.output_dir)
-                
+
+                    if training_args.push_to_hub:
+                        upload_folder(
+                            folder_path=training_args.output_dir,
+                            repo_id=repo_name,
+                            repo_type="model",
+                            commit_message=f"Saving final weights of step {cur_step}",
+                        )
+
                     continue_training = False
                     break
 
