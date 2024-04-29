@@ -37,6 +37,7 @@ import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
+from accelerate.utils import set_seed
 from datasets import (
     DatasetDict,
     IterableDataset,
@@ -57,8 +58,7 @@ from transformers import (
     WhisperForConditionalGeneration,
     WhisperProcessor,
     WhisperTokenizerFast,
-    get_scheduler,
-    set_seed,
+    get_scheduler
 )
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer, EnglishTextNormalizer
