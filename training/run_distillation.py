@@ -358,6 +358,14 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
+    freeze_decoder: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to freeze the entire decoder model."
+            )
+        },
+    )
     freeze_embed_positions: Optional[bool] = field(
         default=False,
         metadata={"help": "Whether to freeze the decoder embedding positions."},
@@ -991,6 +999,13 @@ def main():
     if training_args.freeze_encoder:
         set_trainable_parameters(student_model.model.encoder, requires_grad=False)
         student_model.model.encoder.gradient_checkpointing = False
+    
+    if training_args.freeze_decoder:
+        set_trainable_parameters(student_model.model.decoder, requires_grad=False)
+        student_model.model.decoder.gradient_checkpointing = False
+        # un-freeze LM head parameters (and consequently word embeddings), frozen when frozing decoder since tied word embedding and LM head
+        for p in student_model.proj_out.parameters():
+            p.requires_grad = True 
 
     if training_args.freeze_embed_positions:
         # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
@@ -999,6 +1014,10 @@ def main():
             logger.info(
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
+    
+    logger.info(
+        f"Number of trainable parameters: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):.3e}"
+    )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
@@ -1330,10 +1349,18 @@ def main():
         eval_steps = training_args.eval_steps
 
     # 13. Define optimizer, LR scheduler, collator
+    
+    if training_args.freeze_encoder:
+        forbidden_module = [student_model.model.encoder]
+        if training_args.freeze_decoder:
+            forbidden_module.append(student_model.model.decoder)
+    else:
+        forbidden_module = None
+
     decay_parameters = get_parameter_names(
         student_model,
         [nn.LayerNorm],
-        forbidden_module=[student_model.model.encoder] if training_args.freeze_encoder else None,
+        forbidden_module=forbidden_module,
     )
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
