@@ -337,6 +337,14 @@ class DataTrainingArguments:
         default="distil-whisper",
         metadata={"help": "The name of the wandb project."},
     )
+    wandb_name: str = field(
+        default=None,
+        metadata={"help": "The name of the wandb run."},
+    )
+    wandb_dir: str = field(
+        default="./wandb",
+        metadata={"help": "The dir where wandb metadata will be stored."},
+    )
 
 
 @dataclass
@@ -772,7 +780,14 @@ def main():
         project_dir=training_args.output_dir,
     )
 
-    accelerator.init_trackers(project_name=data_args.wandb_project)
+    accelerator.init_trackers(
+        project_name=data_args.wandb_project,
+        init_kwargs={
+            "wandb": {"name": data_args.wandb_name,
+                      "dir": data_args.wandb_dir}
+        }
+
+    )
 
     # 3. Set-up basic logging
     # Create one log on every process with the configuration for debugging
