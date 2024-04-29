@@ -42,6 +42,7 @@ from transformers import (
     set_seed,
 )
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer, BasicTextNormalizer
+from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.whisper.modeling_whisper import WhisperForCausalLM
 from transformers.utils import check_min_version, is_accelerate_available
 from transformers.utils.versions import require_version
@@ -461,6 +462,9 @@ def main():
             streaming=data_args.streaming,
             num_proc=data_args.preprocessing_num_workers,
         )
+
+        sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
+
         if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
             raise ValueError(
                 f"`--text_column_name` {dataset_dict['text_column_name']} not found in the evaluation "
@@ -471,7 +475,7 @@ def main():
             sub_dataset = sub_dataset.rename_column(dataset_dict["text_column_name"], "text")
         if not data_args.streaming:
             sub_dataset = sub_dataset.to_iterable_dataset()
-
+        
         # Clean-up the dataset name for pretty logging
         # ("distil-whisper/librispeech_asr", "validation.clean") -> "librispeech_asr/validation-clean"
         pretty_name = f"{dataset_dict['name'].split('/')[-1]}/{dataset_dict['split'].replace('.', '-')}"
@@ -702,11 +706,38 @@ def main():
 
     stats_dataset = DatasetDict()
 
-    all_stats = {"rtf": 0, "wer": 0}
+    all_stats = {"rtf": 0, "wer": 0, "tokens_per_sec": 0}
     rtf_stats = {
         "times_audio_total": 0,
         "times_transcription_total": 0,
     }
+
+    def benchmark_gen_time():
+        if model_pipeline is None:
+            batch_gen_kwargs = gen_kwargs
+
+            dummy_encoder_outputs = BaseModelOutput(
+                torch.randn((data_args.batch_size, model.config.max_source_positions, model.config.d_model),
+                             dtype=model.dtype,
+                             device=model.device
+                )            
+            )
+
+            # benchmark time to generate exactly 20 tokens
+            n_tokens = 20
+            start_time = time.time()
+            _ = model.generate(
+                encoder_outputs=dummy_encoder_outputs,
+                min_new_tokens=n_tokens,
+                max_new_tokens=n_tokens,
+                **batch_gen_kwargs
+            )
+            gen_time = time.time() - start_time
+
+            n_generated_tokens = n_tokens * data_args.batch_size
+            tokens_per_sec = n_generated_tokens / gen_time
+        
+        return tokens_per_sec
 
     logger.info("***** Running Evaluation *****")
     for key in generation_arguments:
@@ -719,6 +750,11 @@ def main():
         stats = {}
         times_audio_total = 0
         times_transcription_total = 0
+        tokens_per_secs = []
+
+        # evaluate generation speed for few batch
+        for _ in range(100):
+            tokens_per_secs.append(benchmark_gen_time())
 
         datasets_evaluated_progress_bar.write(f"Start benchmarking {split}...")
         result_iter = iter(result_datasets[split])
@@ -749,6 +785,7 @@ def main():
             wer_per_sample.append(compute_metrics([pred], [ref]))
 
         stats["rtf"] = times_audio_total / times_transcription_total
+        stats["tokens_per_sec"] = sum(tokens_per_secs) / len(tokens_per_secs) 
         stats_dataset[split] = stats
 
         wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in stats.items()])
@@ -770,10 +807,12 @@ def main():
         rtf_stats["times_audio_total"] += times_audio_total
         rtf_stats["times_transcription_total"] += times_transcription_total
         all_stats["wer"] += stats["wer"]
+        all_stats["tokens_per_sec"] += stats["tokens_per_sec"]
 
     all_stats["wer"] = all_stats["wer"] / len(result_datasets)
     # technically this is the reciprocal of the RTF, but it makes the scale easier to read on wandb
     all_stats["rtf"] = rtf_stats["times_audio_total"] / rtf_stats["times_transcription_total"]
+    all_stats["tokens_per_sec"] = all_stats["tokens_per_sec"] / len(result_datasets)
 
     stats_dataset["all"] = all_stats
 
