@@ -60,6 +60,12 @@ def parse_args():
         help="Number of decoder layers to use in the student model. Defaults to 2 layers.",
     )
     parser.add_argument(
+        "--decoder_layers_numbers",
+        type=int,
+        nargs="*",
+        help="Layers numbers of the decoder teacher to use in the student model. Defaults to None, equivalent to taking first and last layer (and equivalent to --decoder_layers_numbers 0 -1).",
+    )
+    parser.add_argument(
         "--save_dir",
         type=str,
         required=True,
@@ -87,11 +93,17 @@ def init_student_model_from_teacher(
     teacher_checkpoint,
     encoder_layers=None,
     decoder_layers=2,
+    decoder_layers_numbers=None,
     save_dir=None,
     push_to_hub=None,
     cache_dir=None,
     subfolder="",
 ):
+    if decoder_layers_numbers is not None and len(decoder_layers_numbers) != decoder_layers:
+        raise ValueError(
+            f"Got {len(decoder_layers_numbers)} layers number for {decoder_layers} decoder layers."
+        )
+
     teacher_model = WhisperForConditionalGeneration.from_pretrained(
         teacher_checkpoint,
         cache_dir=cache_dir,
@@ -116,13 +128,16 @@ def init_student_model_from_teacher(
 
     encoder_mapping = np.linspace(0, teacher_encoder_layers - 1, student_config.encoder_layers, dtype=int)
     encoder_mapping[-1] = teacher_encoder_layers - 1
-
+    
     encoder_map = {}
     for student_layer, teacher_layer in enumerate(encoder_mapping):
         encoder_map[teacher_layer] = student_layer
 
-    decoder_mapping = np.linspace(0, teacher_decoder_layers - 1, student_config.decoder_layers, dtype=int)
-    decoder_mapping[-1] = teacher_decoder_layers - 1
+    if decoder_layers_numbers is None:
+        decoder_mapping = np.linspace(0, teacher_decoder_layers - 1, student_config.decoder_layers, dtype=int)
+        decoder_mapping[-1] = teacher_decoder_layers - 1
+    else:
+        decoder_mapping = decoder_layers_numbers
 
     decoder_map = {}
     for student_layer, teacher_layer in enumerate(decoder_mapping):
@@ -150,7 +165,7 @@ def init_student_model_from_teacher(
                 "Error(s) in loading state_dict for WhisperForConditionalGeneration. \n"
                 f"Unexpected key(s) in state_dict: {encoder_keys}"
             )
-
+        
     for layer in range(teacher_decoder_layers):
         if layer in decoder_map:
             # re-introduce pre-defined layers from the teacher
@@ -208,6 +223,7 @@ if __name__ == "__main__":
         teacher_checkpoint=args.teacher_checkpoint,
         encoder_layers=args.encoder_layers,
         decoder_layers=args.decoder_layers,
+        decoder_layers_numbers=args.decoder_layers_numbers,
         save_dir=args.save_dir,
         push_to_hub=args.push_to_hub,
         cache_dir=args.cache_dir,
