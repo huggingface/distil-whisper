@@ -463,8 +463,6 @@ def main():
             num_proc=data_args.preprocessing_num_workers,
         )
 
-        sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
-
         if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
             raise ValueError(
                 f"`--text_column_name` {dataset_dict['text_column_name']} not found in the evaluation "
