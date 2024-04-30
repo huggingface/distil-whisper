@@ -88,6 +88,38 @@ print("Pred text:", pred_text)
 print("Environment set up successful?", generated_ids.shape[-1] == 20)
 ```
 
+## 0. Recommendations and guidelines 
+
+### 0.1 Datasets
+
+As explained, ideally, you should aim for ~1000 hours of audio data for training a distilled model via KD. Moreover, you should use quality out-of-distribution test sets to assess generalization capacities. With at least 1500 hours of audio data for German, Dutch, French and Spanish, 600 hours for Italian, and 300 hours for Portuguese and Polish (which can be supplemented with your own datasets), a good setup to start with is:
+- [Common Voice 17](https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0) and [Multilingual Librispeech](https://huggingface.co/datasets/facebook/multilingual_librispeech): **train slipts**, **val splits** for in training evaluation, **test splits** for in-distribution testing 
+- [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli) and [Fleurs](https://huggingface.co/datasets/google/fleurs): **test splits** for out-of-distribution testing
+
+### 0.2 Student model's decoder 
+**Number of decoder layers:**  We recommend using a 2-layers decoder (see language transfer below).  However, you can adjust the number of decoder layers when initializing the student model to balance between inference speed and accuracy. Experimentation has revealed that the Pareto optimal points are with 2, 3, and 4-layers decoders. For indicative results, after 10,000 training steps and inference on an 80GB Nvidia H100 with a batch size of 16, compared to a two-layer decoder:
+
+<center>
+
+|    |  rel. token gen. speed |  ΔWER(%) |
+|----------|:-------------:|------:|
+| 3 layers |  $0.91$ | $-1.2$ |
+| 4 layers |    $0.85$   |   $-1.7$ |
+
+</center>
+
+
+**Language transfer (for a 2-layers decoder):** If you opt for a 2-layers decoder, consider leveraging language transfer by initializing the student model from the [distil-large-v3 English distilled model](https://huggingface.co/distil-whisper/distil-large-v3). For french, this method has shown performance improvements of ΔWER=-1.9% (compared to a 2-layers decoder initialized from [Whiper *large-v3*](https://huggingface.co/openai/whisper-large-v3)) after 10,000 training steps.
+
+### 0.3 Language mixing
+
+If you're working with low-resource languages (<500 hours of audio data), consider mixing your training data with a closely related language (for example, mix French and Spanish). To do this:
+1. Run pseudo labeling (see below) for each training dataset, setting the `--language` flag to the language of the respective dataset (e.g., French and Spanish).
+2. Conduct training on these pseudo-labeled datasets, using the `--language` flag set to your targeted language (e.g., French). Note that this flag is only used for evaluation purposes, so you set it to the targeted language. The language token used for forwarding the teacher and student model decoders is the one used and saved in pseudo labels during pseudo-labeling, ensuring it's the correct one for the considered sample.
+
+
+
+
 ## 1. Pseudo-Labelling
 
 The python script [`run_pseudo_labelling.py`](run_pseudo_labelling.py) is a flexible inference script that can be used
