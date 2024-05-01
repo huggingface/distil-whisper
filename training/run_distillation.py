@@ -1350,12 +1350,14 @@ def main():
 
     # 13. Define optimizer, LR scheduler, collator
     
-    if training_args.freeze_encoder:
-        forbidden_module = [student_model.model.encoder]
-        if training_args.freeze_decoder:
-            forbidden_module.append(student_model.model.decoder)
-    else:
-        forbidden_module = None
+    forbidden_module = [
+        module
+        for module, flag in [
+            (student_model.model.encoder, training_args.freeze_encoder),
+            (student_model.model.decoder, training_args.freeze_decoder)
+        ]
+        if flag
+    ] or None
 
     decay_parameters = get_parameter_names(
         student_model,
