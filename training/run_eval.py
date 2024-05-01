@@ -270,6 +270,28 @@ class DataTrainingArguments:
             "help": "Text prompt to condition the generation on. Useful for controlling the style of transcription and predicting named entities."
         },
     )
+    compute_tok_per_s: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "If True, compute tok/sec by forcing the number of generated token ids to num_tokens."
+                "If False, omputes tok/sec over the entire dataset with variable number of generated tokens."  
+            )
+        }
+    )
+    num_tokens: int = field(
+        default=20,
+        metadata={
+            "help": "Number of tokens to generate if computing tok/sec with compute_tok_per_s."
+        }
+    )
+    num_batches: int = field(
+        default=100,
+        metadata={
+            "help": "Number of batches for the tok/sec calculation with compute_tok_per_s"
+        }
+    )
+
 
 
 def write_metric(summary_writer, eval_metrics, step, prefix="eval"):
@@ -651,6 +673,12 @@ def main():
         "no_speech_threshold": data_args.no_speech_threshold,
     }
 
+    forced_decoder_ids = processor.get_decoder_prompt_ids(
+        task=data_args.task, 
+        language=data_args.language, 
+        no_timestamps=data_args.return_timestamps
+    )
+
     def benchmark(batch):
         if model_pipeline is None:
             inputs = torch.stack(batch["input_features"], dim=0).cuda()
@@ -665,7 +693,13 @@ def main():
             set_seed(data_args.seed)
             start_time = time.time()
             output_ids = model.generate(inputs, attention_mask=attention_mask, **batch_gen_kwargs)
-            batch["time"] = inner_batch_size * [(time.time() - start_time) / inner_batch_size]
+            gen_time = time.time() - start_time
+
+            batch["time"] = inner_batch_size * [(gen_time) / inner_batch_size]
+
+            if not data_args.compute_tok_per_s:
+                n_generated_tokens = output_ids.numel() - inner_batch_size * len(forced_decoder_ids)
+                batch["tokens_per_sec"] = inner_batch_size * [(n_generated_tokens / gen_time) / inner_batch_size]
 
             batch["transcription"] = processor.batch_decode(
                 output_ids, skip_special_tokens=True, decode_with_timestamps=data_args.return_timestamps
@@ -712,8 +746,6 @@ def main():
 
     def benchmark_gen_time():
         if model_pipeline is None:
-            batch_gen_kwargs = gen_kwargs
-
             dummy_encoder_outputs = BaseModelOutput(
                 torch.randn((data_args.batch_size, model.config.max_source_positions, model.config.d_model),
                              dtype=model.dtype,
@@ -722,13 +754,13 @@ def main():
             )
 
             # benchmark time to generate exactly 20 tokens
-            n_tokens = 20
+            n_tokens = data_args.num_tokens
             start_time = time.time()
             _ = model.generate(
                 encoder_outputs=dummy_encoder_outputs,
                 min_new_tokens=n_tokens,
                 max_new_tokens=n_tokens,
-                **batch_gen_kwargs
+                **gen_kwargs
             )
             gen_time = time.time() - start_time
 
@@ -750,9 +782,10 @@ def main():
         times_transcription_total = 0
         tokens_per_secs = []
 
-        # evaluate generation speed for few batch
-        for _ in range(100):
-            tokens_per_secs.append(benchmark_gen_time())
+        if data_args.compute_tok_per_s:
+            # evaluate generation speed for few batch
+            for _ in range(data_args.num_batches):
+                tokens_per_secs.append(benchmark_gen_time())
 
         datasets_evaluated_progress_bar.write(f"Start benchmarking {split}...")
         result_iter = iter(result_datasets[split])
@@ -764,6 +797,8 @@ def main():
                 result["transcription"] = result["transcription"].replace(data_args.prompt_text, "")
             transcriptions.append(result["transcription"])
             references.append(result["reference"])
+            if not data_args.compute_tok_per_s:
+                tokens_per_secs.append(result["tokens_per_sec"])
 
         norm_transcriptions = [normalizer(pred) for pred in transcriptions]
         norm_references = [normalizer(label) for label in references]
