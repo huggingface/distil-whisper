@@ -362,7 +362,7 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
         default=False,
         metadata={
             "help": (
-                "Whether to freeze the entire decoder model."
+                "Whether to freeze the entire decoder model. Note that the decoder input embeddings are **not** frozen, since they are tied to the LM head."
             )
         },
     )
