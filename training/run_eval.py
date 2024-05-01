@@ -270,25 +270,25 @@ class DataTrainingArguments:
             "help": "Text prompt to condition the generation on. Useful for controlling the style of transcription and predicting named entities."
         },
     )
-    compute_tok_per_s: bool = field(
+    precise_tok_per_s: bool = field(
         default=False,
         metadata={
             "help": (
-                "If True, compute tok/sec by forcing the number of generated token ids to num_tokens."
-                "If False, omputes tok/sec over the entire dataset with variable number of generated tokens."  
+                "If True, compute tok/sec by forcing the number of generated token ids to num_tokens on dummy batches. "
+                "If False, computes tok/sec over the entire dataset with variable number of generated tokens."  
             )
         }
     )
     num_tokens: int = field(
         default=20,
         metadata={
-            "help": "Number of tokens to generate if computing tok/sec with compute_tok_per_s."
+            "help": "Number of tokens to generate if computing tok/sec with precise_tok_per_s."
         }
     )
     num_batches: int = field(
         default=100,
         metadata={
-            "help": "Number of batches for the tok/sec calculation with compute_tok_per_s"
+            "help": "Number of batches for the tok/sec calculation with precise_tok_per_s"
         }
     )
 
@@ -697,7 +697,7 @@ def main():
 
             batch["time"] = inner_batch_size * [(gen_time) / inner_batch_size]
 
-            if not data_args.compute_tok_per_s:
+            if not data_args.precise_tok_per_s:
                 n_generated_tokens = output_ids.numel() - inner_batch_size * len(forced_decoder_ids)
                 batch["tokens_per_sec"] = inner_batch_size * [(n_generated_tokens / gen_time) / inner_batch_size]
 
@@ -775,6 +775,7 @@ def main():
 
     datasets_evaluated_progress_bar = tqdm(result_datasets, desc="Datasets", position=0)
     for split in datasets_evaluated_progress_bar:
+        
         transcriptions = []
         references = []
         stats = {}
@@ -782,7 +783,7 @@ def main():
         times_transcription_total = 0
         tokens_per_secs = []
 
-        if data_args.compute_tok_per_s:
+        if data_args.precise_tok_per_s:
             # evaluate generation speed for few batch
             for _ in range(data_args.num_batches):
                 tokens_per_secs.append(benchmark_gen_time())
@@ -797,7 +798,7 @@ def main():
                 result["transcription"] = result["transcription"].replace(data_args.prompt_text, "")
             transcriptions.append(result["transcription"])
             references.append(result["reference"])
-            if not data_args.compute_tok_per_s:
+            if not data_args.precise_tok_per_s:
                 tokens_per_secs.append(result["tokens_per_sec"])
 
         norm_transcriptions = [normalizer(pred) for pred in transcriptions]
