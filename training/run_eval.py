@@ -753,7 +753,7 @@ def main():
                 )            
             )
 
-            # benchmark time to generate exactly 20 tokens
+            # benchmark time to generate fixed number of tokens
             n_tokens = data_args.num_tokens
             start_time = time.time()
             _ = model.generate(
