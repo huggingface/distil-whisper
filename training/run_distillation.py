@@ -1004,8 +1004,8 @@ def main():
         set_trainable_parameters(student_model.model.decoder, requires_grad=False)
         student_model.model.decoder.gradient_checkpointing = False
         # un-freeze LM head parameters (and consequently word embeddings), frozen when frozing decoder since tied word embedding and LM head
-        for p in student_model.proj_out.parameters():
-            p.requires_grad = True 
+        set_trainable_parameters(student_model.proj_out, requires_grad=True) 
+        
 
     if training_args.freeze_embed_positions:
         # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
