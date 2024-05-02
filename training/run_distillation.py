@@ -37,6 +37,7 @@ import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
+from accelerate.utils import set_seed
 from datasets import (
     DatasetDict,
     IterableDataset,
@@ -57,8 +58,7 @@ from transformers import (
     WhisperForConditionalGeneration,
     WhisperProcessor,
     WhisperTokenizerFast,
-    get_scheduler,
-    set_seed,
+    get_scheduler
 )
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer, EnglishTextNormalizer
@@ -337,6 +337,14 @@ class DataTrainingArguments:
         default="distil-whisper",
         metadata={"help": "The name of the wandb project."},
     )
+    wandb_name: str = field(
+        default=None,
+        metadata={"help": "The name of the wandb run."},
+    )
+    wandb_dir: str = field(
+        default="./wandb",
+        metadata={"help": "The dir where wandb metadata will be stored."},
+    )
 
 
 @dataclass
@@ -347,6 +355,14 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             "help": (
                 "Whether to freeze the entire encoder model. Only recommended when the entire encoder has been "
                 "copied from the teacher model."
+            )
+        },
+    )
+    freeze_decoder: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to freeze the entire decoder model. Note that the decoder input embeddings are **not** frozen, since they are tied to the LM head."
             )
         },
     )
@@ -772,7 +788,14 @@ def main():
         project_dir=training_args.output_dir,
     )
 
-    accelerator.init_trackers(project_name=data_args.wandb_project)
+    accelerator.init_trackers(
+        project_name=data_args.wandb_project,
+        init_kwargs={
+            "wandb": {"name": data_args.wandb_name,
+                      "dir": data_args.wandb_dir}
+        }
+
+    )
 
     # 3. Set-up basic logging
     # Create one log on every process with the configuration for debugging
@@ -976,6 +999,13 @@ def main():
     if training_args.freeze_encoder:
         set_trainable_parameters(student_model.model.encoder, requires_grad=False)
         student_model.model.encoder.gradient_checkpointing = False
+    
+    if training_args.freeze_decoder:
+        set_trainable_parameters(student_model.model.decoder, requires_grad=False)
+        student_model.model.decoder.gradient_checkpointing = False
+        # un-freeze LM head parameters (and consequently word embeddings), frozen when frozing decoder since tied word embedding and LM head
+        set_trainable_parameters(student_model.proj_out, requires_grad=True) 
+        
 
     if training_args.freeze_embed_positions:
         # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
@@ -984,6 +1014,10 @@ def main():
             logger.info(
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
+    
+    logger.info(
+        f"Number of trainable parameters: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):.3e}"
+    )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
@@ -1315,10 +1349,20 @@ def main():
         eval_steps = training_args.eval_steps
 
     # 13. Define optimizer, LR scheduler, collator
+    
+    forbidden_module = [
+        module
+        for module, flag in [
+            (student_model.model.encoder, training_args.freeze_encoder),
+            (student_model.model.decoder, training_args.freeze_decoder)
+        ]
+        if flag
+    ] or None
+
     decay_parameters = get_parameter_names(
         student_model,
         [nn.LayerNorm],
-        forbidden_module=[student_model.model.encoder] if training_args.freeze_encoder else None,
+        forbidden_module=forbidden_module,
     )
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
