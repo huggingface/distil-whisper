@@ -763,9 +763,6 @@ def main():
 
     def benchmark_gen(num_batches):
 
-        if model_pipeline is not None:
-            model_pipeline_copy = copy.deepcopy(model_pipeline)
-
         tokens_per_secs = []
         for _ in range(num_batches):
 
@@ -779,7 +776,6 @@ def main():
             
             if model_pipeline is None:
                 # benchmark time to generate fixed number of tokens
-                
                 start_time = time.time()
                 _ = model.generate(
                     encoder_outputs=dummy_encoder_outputs,
@@ -793,82 +789,19 @@ def main():
                 tokens_per_secs.append(n_generated_tokens / gen_time)
             
             else:
-                time_result = []
                 n_generated_tokens = []
 
-                def _forward_skip_encode(self, model_inputs, return_timestamps=False, **generate_kwargs):
-                    
-                    attention_mask = model_inputs.pop("attention_mask", None)
-                    stride = model_inputs.pop("stride", None)
-                    is_last = model_inputs.pop("is_last")
-
-                    # custom processing for Whisper timestamps and word-level timestamps
-                    if return_timestamps :
-                        generate_kwargs["return_timestamps"] = return_timestamps
-                        if return_timestamps == "word":
-                            generate_kwargs["return_token_timestamps"] = True
-                            generate_kwargs["return_segments"] = True
-
-                            if stride is not None:
-                                if isinstance(stride, tuple):
-                                    generate_kwargs["num_frames"] = stride[0] // self.feature_extractor.hop_length
-                                else:
-                                    generate_kwargs["num_frames"] = [s[0] // self.feature_extractor.hop_length for s in stride]
-
-                    tokens = self.model.generate(
-                        attention_mask=attention_mask,
-                        **generate_kwargs,
-                    )
-
-                    # whisper longform generation stores timestamps in "segments"
-                    if return_timestamps == "word":
-                        if "segments" not in tokens:
-                            out = {"tokens": tokens["sequences"], "token_timestamps": tokens["token_timestamps"]}
-                        else:
-                            token_timestamps = [
-                                torch.cat([segment["token_timestamps"] for segment in segment_list])
-                                for segment_list in tokens["segments"]
-                            ]
-                            out = {"tokens": tokens["sequences"], "token_timestamps": token_timestamps}
-                    else:
-                        out = {"tokens": tokens}
-                    
-                    if stride is not None:
-                        out["stride"] = stride
-
-                    # Leftover
-                    extra = model_inputs
-                    return {"is_last": is_last, **out, **extra}
-
-                model_pipeline_copy._forward = types.MethodType(_forward_skip_encode, model_pipeline_copy)
-                forward_skip_encode = model_pipeline_copy._forward
-                
-                def _forward_time(*args, **kwargs):
-                    start_time = time.time()
-                    result = forward_skip_encode(*args, **kwargs)
-                    end_time = time.time() - start_time
-                    time_result.append(end_time)
-                    for toks in result['tokens']:
-                        n_generated_tokens.append(len(toks) - len(forced_decoder_ids))
-                    return result
-
-                model_pipeline_copy._forward = _forward_time
-
-                # dummy_input, will be ignored
-                _unused_input = [np.zeros(1, dtype=np.float32)]
-                _ = model_pipeline_copy(
-                    _unused_input,
-                    batch_size=PIPELINE_BATCH_SIZE,
-                    generate_kwargs={
-                        "encoder_outputs": dummy_encoder_outputs,
-                        "min_new_tokens": n_tokens, 
-                        "max_new_tokens": n_tokens, 
-                        **gen_kwargs
-                    }
+                # benchmark time to generate fixed number of tokens
+                start_time = time.time()
+                _ = model_pipeline.model.generate(
+                    encoder_outputs=dummy_encoder_outputs,
+                    min_new_tokens=n_tokens,
+                    max_new_tokens=n_tokens,
+                    **gen_kwargs
                 )
+                gen_time = time.time() - start_time
 
-                n_generated_tokens = sum(n_generated_tokens)
-                gen_time = time_result[0]
+                n_generated_tokens = n_tokens * data_args.batch_size
                 tokens_per_secs.append(n_generated_tokens / gen_time)
 
         return tokens_per_secs
