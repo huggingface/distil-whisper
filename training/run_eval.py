@@ -23,6 +23,8 @@ import os
 import sys
 import tempfile
 import time
+import types
+import copy
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -709,17 +711,32 @@ def main():
             inputs = batch["input_features"]
             # Time forward: let's make sure that only forward is timed and not pre- and post-processing
             time_result = []
+            n_generated_tokens = []
 
             def _forward_time(*args, **kwargs):
                 start_time = time.time()
                 result = model_pipeline_forward(*args, **kwargs)
                 end_time = time.time() - start_time
                 time_result.append(end_time)
+                for toks in result['tokens']:
+                    n_generated_tokens.append(len(toks) - len(forced_decoder_ids))
                 return result
 
             model_pipeline._forward = _forward_time
 
-            result = model_pipeline(inputs, batch_size=PIPELINE_BATCH_SIZE, generate_kwargs=gen_kwargs)[0]["text"]
+            result = model_pipeline(
+                inputs, 
+                batch_size=PIPELINE_BATCH_SIZE, 
+                generate_kwargs={
+                    **gen_kwargs
+                }
+            )[0]["text"]
+
+            if not data_args.precise_tok_per_s:
+                n_generated_tokens = sum(n_generated_tokens)
+                gen_time = time_result[0]
+                batch["tokens_per_sec"] = [n_generated_tokens / gen_time] 
+
             batch["transcription"] = [result]
             batch["time"] = [sum(time_result)]
 
@@ -744,30 +761,117 @@ def main():
         "times_transcription_total": 0,
     }
 
-    def benchmark_gen_time():
-        if model_pipeline is None:
+    def benchmark_gen(num_batches):
+
+        if model_pipeline is not None:
+            model_pipeline_copy = copy.deepcopy(model_pipeline)
+
+        tokens_per_secs = []
+        for _ in range(num_batches):
+
             dummy_encoder_outputs = BaseModelOutput(
-                torch.randn((data_args.batch_size, model.config.max_source_positions, model.config.d_model),
-                             dtype=model.dtype,
-                             device=model.device
-                )            
-            )
-
-            # benchmark time to generate fixed number of tokens
+                    torch.randn((data_args.batch_size, model.config.max_source_positions, model.config.d_model),
+                                dtype=model.dtype,
+                                device=model.device
+                    )            
+                )
             n_tokens = data_args.num_tokens
-            start_time = time.time()
-            _ = model.generate(
-                encoder_outputs=dummy_encoder_outputs,
-                min_new_tokens=n_tokens,
-                max_new_tokens=n_tokens,
-                **gen_kwargs
-            )
-            gen_time = time.time() - start_time
+            
+            if model_pipeline is None:
+                # benchmark time to generate fixed number of tokens
+                
+                start_time = time.time()
+                _ = model.generate(
+                    encoder_outputs=dummy_encoder_outputs,
+                    min_new_tokens=n_tokens,
+                    max_new_tokens=n_tokens,
+                    **gen_kwargs
+                )
+                gen_time = time.time() - start_time
 
-            n_generated_tokens = n_tokens * data_args.batch_size
-            tokens_per_sec = n_generated_tokens / gen_time
-        
-        return tokens_per_sec
+                n_generated_tokens = n_tokens * data_args.batch_size
+                tokens_per_secs.append(n_generated_tokens / gen_time)
+            
+            else:
+                time_result = []
+                n_generated_tokens = []
+
+                def _forward_skip_encode(self, model_inputs, return_timestamps=False, **generate_kwargs):
+                    
+                    attention_mask = model_inputs.pop("attention_mask", None)
+                    stride = model_inputs.pop("stride", None)
+                    is_last = model_inputs.pop("is_last")
+
+                    # custom processing for Whisper timestamps and word-level timestamps
+                    if return_timestamps :
+                        generate_kwargs["return_timestamps"] = return_timestamps
+                        if return_timestamps == "word":
+                            generate_kwargs["return_token_timestamps"] = True
+                            generate_kwargs["return_segments"] = True
+
+                            if stride is not None:
+                                if isinstance(stride, tuple):
+                                    generate_kwargs["num_frames"] = stride[0] // self.feature_extractor.hop_length
+                                else:
+                                    generate_kwargs["num_frames"] = [s[0] // self.feature_extractor.hop_length for s in stride]
+
+                    tokens = self.model.generate(
+                        attention_mask=attention_mask,
+                        **generate_kwargs,
+                    )
+
+                    # whisper longform generation stores timestamps in "segments"
+                    if return_timestamps == "word":
+                        if "segments" not in tokens:
+                            out = {"tokens": tokens["sequences"], "token_timestamps": tokens["token_timestamps"]}
+                        else:
+                            token_timestamps = [
+                                torch.cat([segment["token_timestamps"] for segment in segment_list])
+                                for segment_list in tokens["segments"]
+                            ]
+                            out = {"tokens": tokens["sequences"], "token_timestamps": token_timestamps}
+                    else:
+                        out = {"tokens": tokens}
+                    
+                    if stride is not None:
+                        out["stride"] = stride
+
+                    # Leftover
+                    extra = model_inputs
+                    return {"is_last": is_last, **out, **extra}
+
+                model_pipeline_copy._forward = types.MethodType(_forward_skip_encode, model_pipeline_copy)
+                forward_skip_encode = model_pipeline_copy._forward
+                
+                def _forward_time(*args, **kwargs):
+                    start_time = time.time()
+                    result = forward_skip_encode(*args, **kwargs)
+                    end_time = time.time() - start_time
+                    time_result.append(end_time)
+                    for toks in result['tokens']:
+                        n_generated_tokens.append(len(toks) - len(forced_decoder_ids))
+                    return result
+
+                model_pipeline_copy._forward = _forward_time
+
+                # dummy_input, will be ignored
+                _unused_input = [np.zeros(1, dtype=np.float32)]
+                _ = model_pipeline_copy(
+                    _unused_input,
+                    batch_size=PIPELINE_BATCH_SIZE,
+                    generate_kwargs={
+                        "encoder_outputs": dummy_encoder_outputs,
+                        "min_new_tokens": n_tokens, 
+                        "max_new_tokens": n_tokens, 
+                        **gen_kwargs
+                    }
+                )
+
+                n_generated_tokens = sum(n_generated_tokens)
+                gen_time = time_result[0]
+                tokens_per_secs.append(n_generated_tokens / gen_time)
+
+        return tokens_per_secs
 
     logger.info("***** Running Evaluation *****")
     for key in generation_arguments:
@@ -785,8 +889,7 @@ def main():
 
         if data_args.precise_tok_per_s:
             # evaluate generation speed for few batch
-            for _ in range(data_args.num_batches):
-                tokens_per_secs.append(benchmark_gen_time())
+            tokens_per_secs = benchmark_gen_time(data_args.num_batches)
 
         datasets_evaluated_progress_bar.write(f"Start benchmarking {split}...")
         result_iter = iter(result_datasets[split])
