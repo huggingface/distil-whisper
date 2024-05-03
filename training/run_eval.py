@@ -676,7 +676,7 @@ def main():
     forced_decoder_ids = processor.get_decoder_prompt_ids(
         task=data_args.task, 
         language=data_args.language, 
-        no_timestamps=data_args.return_timestamps
+        no_timestamps=not data_args.return_timestamps
     )
 
     def benchmark(batch):
