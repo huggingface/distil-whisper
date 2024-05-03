@@ -111,7 +111,9 @@ We recommend using a 2-layers decoder (see language transfer below).  However, y
 </center>
 
 
-**Language transfer (for a 2-layers decoder):** If you opt for a 2-layers decoder, consider leveraging language transfer by initializing the student model from the [distil-large-v3 English distilled model](https://huggingface.co/distil-whisper/distil-large-v3). For French, this method has shown performance improvements of ΔWER=-1.9% (compared to a 2-layers decoder initialized from [Whiper *large-v3*](https://huggingface.co/openai/whisper-large-v3)) after 10,000 training steps.
+#### 0.2.2 Language Transfer
+
+If you opt for a 2-layers decoder, consider leveraging language transfer by initializing the student model from the [distil-large-v3 English distilled model](https://huggingface.co/distil-whisper/distil-large-v3). For French, this method has shown performance improvements of ΔWER=-1.9% (compared to a 2-layers decoder initialized from [Whiper *large-v3*](https://huggingface.co/openai/whisper-large-v3)) after 10,000 training steps.
 
 ### 0.3 Language mixing
 
