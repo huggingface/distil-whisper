@@ -115,7 +115,7 @@ We recommend using a 2-layers decoder (see language transfer below).  However, y
 
 ### 0.3 Language mixing
 
-If you're working with low-resource languages (<500 hours of audio data), consider mixing your training data with a closely related language (for example, mix French and Spanish). To do this:
+If you're working with low-resource languages (<500 hours of audio data), consider mixing your training data with a closely related language (for example, mix French and Spanish) to leverage knowledge transfer between languages. To do this:
 1. Run [pseudo labeling](#1-pseudo-labelling) for each training dataset, setting the `--language` flag to the language of the respective dataset (e.g., French and Spanish).
 2. Conduct training on these pseudo-labeled datasets, using the `--language` flag set to your targeted language (e.g., French). Note that this flag is only used for evaluation purposes, so you set it to the targeted language. The language token used for forwarding the teacher and student model decoders is the one used and saved in pseudo labels during pseudo-labeling, ensuring it's the correct one for the considered sample.
 
