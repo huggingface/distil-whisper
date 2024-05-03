@@ -787,8 +787,6 @@ def main():
                 tokens_per_secs.append(n_generated_tokens / gen_time)
             
             else:
-                n_generated_tokens = []
-
                 # benchmark time to generate fixed number of tokens
                 start_time = time.time()
                 _ = model_pipeline.model.generate(
