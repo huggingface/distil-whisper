@@ -889,7 +889,7 @@ def main():
 
         if data_args.precise_tok_per_s:
             # evaluate generation speed for few batch
-            tokens_per_secs = benchmark_gen_time(data_args.num_batches)
+            tokens_per_secs = benchmark_gen(data_args.num_batches)
 
         datasets_evaluated_progress_bar.write(f"Start benchmarking {split}...")
         result_iter = iter(result_datasets[split])
