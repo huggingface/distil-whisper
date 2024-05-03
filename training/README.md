@@ -93,8 +93,8 @@ print("Environment set up successful?", generated_ids.shape[-1] == 20)
 ### 0.1 Datasets
 
 As explained, ideally, you should aim for ~1000 hours of audio data for training a distilled model via KD. Moreover, you should use quality out-of-distribution test sets to assess generalization capacities. With at least 1500 hours of audio data for German, Dutch, French and Spanish, 600 hours for Italian, and 300 hours for Portuguese and Polish (which can be supplemented with your own datasets), a good setup to start with is:
-- [Common Voice 17](https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0) and [Multilingual Librispeech](https://huggingface.co/datasets/facebook/multilingual_librispeech): **train slipts**, **val splits** for in training evaluation, **test splits** for in-distribution testing 
-- [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli) and [Fleurs](https://huggingface.co/datasets/google/fleurs): **test splits** for out-of-distribution testing
+- **Training datasets:** [Common Voice 17](https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0) and [Multilingual Librispeech](https://huggingface.co/datasets/facebook/multilingual_librispeech). Use the `train` split for training, and the `validation` and `test` splits for in-distribution testing.
+- **Test datasets:** [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli) and [Fleurs](https://huggingface.co/datasets/google/fleurs). Use the `validation` and `test` splits for out-of-distribution testing.
 
 ### 0.2 Student model's decoder 
 **Number of decoder layers:**  We recommend using a 2-layers decoder (see language transfer below).  However, you can adjust the number of decoder layers when initializing the student model to balance between inference speed and accuracy. Experimentation has revealed that the Pareto optimal points are with 2, 3, and 4-layers decoders. For indicative results, after 10,000 training steps and inference on an 80GB Nvidia H100 with a batch size of 16, compared to a 2-layers decoder:
