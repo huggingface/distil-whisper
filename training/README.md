@@ -315,7 +315,7 @@ As well as a few noteworthy model arguments that can be configured to give optim
 1. `freeze_encoder`: whether to freeze the entire encoder of the student model during training. Beneficial when the student encoder is copied exactly from the teacher encoder. In this case, the encoder hidden-states from the teacher model are re-used for the student model. Stopping the gradient computation through the encoder and sharing the encoder hidden-states provides a significant memory saving, and can enable up to 2x batch sizes. 
 2. `freeze_embed_positions`: whether to freeze the student model's decoder positional embeddings. Using the same embed positions as the teacher model, which is designed to handle context lengths up to 448 tokens, helps the student model retain its input id representation up to the full max input length. 
 3. `dtype`: data type (dtype) in which the model computation should be performed. Note that this only controls the dtype of the computations (forward and backward pass), and not the dtype of the parameters or optimiser states.
-4. `freeze_decoder`: wether to freeze the student model's decoder. Note that the input tokens embeddings and language modelling head will remain trainable.  
+4. `freeze_decoder`: whether to freeze the student model's decoder. Note that the input tokens embeddings and language modelling head will remain trainable.  
 
 And finally, a few noteworthy training arguments:
 1. `max_steps`: defines the total number of optimisation steps (forward + backward pass) during training. To reach convergence, you should use a dataset of at least 1k hours and train for a minimum of 50k steps.
