@@ -97,7 +97,9 @@ As explained, ideally, you should aim for ~1000 hours of audio data for training
 - **Test datasets:** [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli) and [Fleurs](https://huggingface.co/datasets/google/fleurs). Use the `validation` and `test` splits for out-of-distribution testing.
 
 ### 0.2 Student model's decoder 
-**Number of decoder layers:**  We recommend using a 2-layers decoder (see language transfer below).  However, you can adjust the number of decoder layers when initializing the student model to balance between inference speed and accuracy. Experimentation has revealed that the Pareto optimal points are with 2, 3, and 4-layers decoders. For indicative results, after 10,000 training steps and inference on an 80GB Nvidia H100 with a batch size of 16, compared to a 2-layers decoder:
+#### 0.2.1 Number of Decoder Layers
+
+We recommend using a 2-layers decoder (see language transfer below).  However, you can adjust the number of decoder layers when initializing the student model to balance between inference speed and accuracy. Experimentation has revealed that the Pareto optimal points are with 2, 3, and 4-layers decoders. For indicative results, after 10,000 training steps and inference on an 80GB Nvidia H100 with a batch size of 16, compared to a 2-layers decoder:
 
 <center>
 
