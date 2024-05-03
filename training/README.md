@@ -92,7 +92,7 @@ print("Environment set up successful?", generated_ids.shape[-1] == 20)
 
 ### 0.1 Datasets
 
-As explained, ideally, you should aim for ~1000 hours of audio data for training a distilled model via KD. Moreover, you should use quality out-of-distribution test sets to assess generalization capacities. With at least 1500 hours of audio data for German, Dutch, French and Spanish, 600 hours for Italian, and 300 hours for Portuguese and Polish (which can be supplemented with your own datasets), a good setup to start with is:
+As explained, ideally, you should aim for ~1000 hours of audio data for training a distilled model via KD. Moreover, you should evaluate your model on out-of-distribution test sets to assess generalization capacities. With at least 1500 hours of audio data for German, Dutch, French and Spanish, 600 hours for Italian, and 300 hours for Portuguese and Polish (which can be supplemented with your own datasets), a good setup to start with is:
 - **Training datasets:** [Common Voice 17](https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0) and [Multilingual Librispeech](https://huggingface.co/datasets/facebook/multilingual_librispeech). Use the `train` split for training, and the `validation` and `test` splits for in-distribution testing.
 - **Test datasets:** [VoxPopuli](https://huggingface.co/datasets/facebook/voxpopuli) and [Fleurs](https://huggingface.co/datasets/google/fleurs). Use the `validation` and `test` splits for out-of-distribution testing.
 
