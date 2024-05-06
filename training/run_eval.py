@@ -782,9 +782,6 @@ def main():
                     **gen_kwargs
                 )
                 gen_time = time.time() - start_time
-
-                n_generated_tokens = n_tokens * data_args.batch_size
-                tokens_per_secs.append(n_generated_tokens / gen_time)
             
             else:
                 # benchmark time to generate fixed number of tokens
@@ -797,8 +794,8 @@ def main():
                 )
                 gen_time = time.time() - start_time
 
-                n_generated_tokens = n_tokens * data_args.batch_size
-                tokens_per_secs.append(n_generated_tokens / gen_time)
+            n_generated_tokens = n_tokens * data_args.batch_size
+            tokens_per_secs.append(n_generated_tokens / gen_time)
 
         return tokens_per_secs
 
