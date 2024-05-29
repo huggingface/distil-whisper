@@ -291,6 +291,12 @@ class DataTrainingArguments:
             "help": "Number of batches for the tok/sec calculation with precise_tok_per_s"
         }
     )
+    only_short_form: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether the evaluation should be short form (filter out samples >= 30sec)." 
+        }
+    )
 
 
 
@@ -484,6 +490,9 @@ def main():
             streaming=data_args.streaming,
             num_proc=data_args.preprocessing_num_workers,
         )
+        
+        if data_args.only_short_form:
+            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
 
         if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
             raise ValueError(
