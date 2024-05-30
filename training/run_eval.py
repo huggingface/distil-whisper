@@ -294,7 +294,13 @@ class DataTrainingArguments:
     only_short_form: bool = field(
         default=False,
         metadata={
-            "help": "Whether the evaluation should be short form (filter out samples >= 30sec)." 
+            "help": "Whether the evaluation should be only short form (filter out samples > 30sec)." 
+        }
+    )
+    only_long_form: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether the evaluation should be only long form (filter out samples <= 30sec)." 
         }
     )
 
@@ -493,6 +499,9 @@ def main():
         
         if data_args.only_short_form:
             sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
+
+        if data_args.only_long_form:
+            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] > 30)
 
         if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
             raise ValueError(
