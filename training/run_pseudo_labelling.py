@@ -970,16 +970,17 @@ def main():
                         concatenated_prev.append(prompt_ids)
                 return {"condition_on_prev": concatenated_prev}
 
-            with accelerator.main_process_first():
-                raw_datasets[split] = raw_datasets[split].map(
-                    add_concatenated_text,
-                    input_columns=["eval_preds", "condition_on_prev"],
-                    remove_columns=["eval_preds"],
-                    desc="Setting condition on prev...",
-                    batched=True,
-                    batch_size=preprocessing_batch_size,
-                    num_proc=num_workers,
-                )
+            if data_args.concatenate_audio:
+                with accelerator.main_process_first():
+                    raw_datasets[split] = raw_datasets[split].map(
+                        add_concatenated_text,
+                        input_columns=["eval_preds", "condition_on_prev"],
+                        remove_columns=["eval_preds"],
+                        desc="Setting condition on prev...",
+                        batched=True,
+                        batch_size=preprocessing_batch_size,
+                        num_proc=num_workers,
+                    )
 
     logger.info("***** Running Labelling *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
