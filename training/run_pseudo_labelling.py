@@ -629,50 +629,33 @@ def main():
 
     def concatenate_dataset(batch):
         audio = [sample["array"] for sample in batch[audio_column_name]]
-        input_lengths = [len(sample) for sample in audio]
-
         text = batch[text_column_name]
         speaker_id = batch[speaker_id_column_name] if speaker_id_column_name else len(text) * [None]
 
-        concatenated_audio = []
-        concatenated_text = []
-        concatenated_speaker = []
-        condition_on_prev = []
-        audio_sample = audio[0]
-        text_sample = text[0]
+        # initialize
+        concat_audio = [audio[0]]
+        concat_text = [text[0]]
+        concat_speaker_id = [speaker_id[0]]
+        condition_on_prev = [0]
 
-        for idx in range(1, len(audio)):
-            prev_speaker = speaker_id[idx - 1]
-            speaker = speaker_id[idx]
+        for audio, text, speaker_id in zip(audio[1:], text[1:], speaker_id[1:]):
 
-            if len(audio_sample) + input_lengths[idx] < max_input_length:
-                if speaker == prev_speaker:
-                    # we have no information about whether the segments follow on sequentially
-                    # so we just ensure the same speaker as we concatenate across files
-                    audio_sample = np.append(audio_sample, audio[idx])
-                    # extra spaces in the text transcription don't matter, since we only use it for the WER computation
-                    text_sample += " " + text[idx]
-                else:
-                    # speakers do not follow sequentially, save the audio and start looping again
-                    concatenated_audio.append(audio_sample)
-                    concatenated_text.append(text_sample)
-                    concatenated_speaker.append(speaker)
-                    condition_on_prev.append(0)
-                    audio_sample = audio[idx]
-                    text_sample = text[idx]
+            is_same_speaker = speaker_id == concat_speaker_id[-1]
+            is_concatenable = len(audio) + len(concat_audio[-1]) <= max_input_length 
 
+            if is_same_speaker and is_concatenable:
+                # inplace concatenation
+                concat_audio[-1] = np.append(concat_audio[-1], audio)
+                concat_text[-1] = concat_text[-1] + " " + text
             else:
-                # concatenated audio exceeds max length, save the audio and start looping again
-                concatenated_audio.append(audio_sample)
-                concatenated_text.append(text_sample)
-                concatenated_speaker.append(speaker)
-                condition_on_prev.append(1)
-                audio_sample = audio[idx]
-                text_sample = text[idx]
+                concat_audio.append(audio)
+                concat_text.append(text)
+                concat_speaker_id.append(speaker_id)
+                condition_on_prev.append(1 if is_same_speaker else 0)   
 
-        batch[audio_column_name] = [{"array": array, "sampling_rate": sampling_rate} for array in concatenated_audio]
-        batch[text_column_name] = concatenated_text
-        batch[id_column_name] = concatenated_speaker
+        batch[audio_column_name] = [{"array": array, "sampling_rate": sampling_rate} for array in concat_audio]
+        batch[text_column_name] = concat_text
+        batch[id_column_name] = concat_speaker_id
         batch["condition_on_prev"] = condition_on_prev
 
         return batch
