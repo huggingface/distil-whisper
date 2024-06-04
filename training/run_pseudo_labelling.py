@@ -44,6 +44,7 @@ from datasets import (
 from huggingface_hub import HfFolder, create_repo, get_full_repo_name, snapshot_download, upload_folder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from soundfile import LibsndfileError
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
@@ -628,18 +629,35 @@ def main():
         raw_datasets = raw_datasets.sort(speaker_id_column_name)
 
     def concatenate_dataset(batch):
-        audio = [sample["array"] for sample in batch[audio_column_name]]
-        text = batch[text_column_name]
-        speaker_id = batch[speaker_id_column_name] if speaker_id_column_name else len(text) * [None]
+        audio, text, speaker_id = [], [], []
 
-        # initialize
+        for sample_audio, sample_text, sample_speaker_id, sample_id in zip(
+            batch[audio_column_name], 
+            batch[text_column_name], 
+            batch[speaker_id_column_name] if speaker_id_column_name else len(text) * [None],
+            batch[id_column_name]
+        ):
+            try:
+                audio_array = sample_audio["array"]
+            except LibsndfileError:
+                logger.warning(f"{sample_id} corrupted! Skipping sample.")
+                continue
+
+            if len(sample_text) == 0 or sample_text is None:
+                logger.warning(f"{sample_id} has empty transcription! Skipping sample.")
+                continue
+
+            audio.append(audio_array)
+            text.append(sample_text)
+            sample_speaker_id.append(sample_id)
+
+        # initialize concatenations
         concat_audio = [audio[0]]
         concat_text = [text[0]]
         concat_speaker_id = [speaker_id[0]]
         condition_on_prev = [0]
 
         for audio, text, speaker_id in zip(audio[1:], text[1:], speaker_id[1:]):
-
             is_same_speaker = speaker_id == concat_speaker_id[-1]
             is_concatenable = len(audio) + len(concat_audio[-1]) <= max_input_length 
 
