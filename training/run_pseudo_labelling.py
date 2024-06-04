@@ -649,7 +649,7 @@ def main():
 
             audio.append(audio_array)
             text.append(sample_text)
-            sample_speaker_id.append(sample_id)
+            sample_speaker_id.append(sample_speaker_id)
 
         # initialize concatenations
         concat_audio = [audio[0]]
