@@ -43,6 +43,7 @@ from transformers import (
 )
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer, BasicTextNormalizer
 from transformers.models.whisper.modeling_whisper import WhisperForCausalLM
+from transformers.models.whisper.tokenization_whisper import TO_LANGUAGE_CODE
 from transformers.utils import check_min_version, is_accelerate_available
 from transformers.utils.versions import require_version
 
@@ -371,6 +372,29 @@ def convert_dataset_str_to_list(
     return dataset_names_dict
 
 
+def language_to_id(language: str, generation_config) -> str:
+    language = language.lower()
+    if language in generation_config.lang_to_id.keys():
+        language_token = language
+    elif language in TO_LANGUAGE_CODE.keys():
+        language_token = f"<|{TO_LANGUAGE_CODE[language]}|>"
+    elif language in TO_LANGUAGE_CODE.values():
+        language_token = f"<|{language}|>"
+    else:
+        is_language_code = len(language) == 2
+        raise ValueError(
+            f"Unsupported language: {language}. Language should be one of:"
+            f" {list(TO_LANGUAGE_CODE.values()) if is_language_code else list(TO_LANGUAGE_CODE.keys())}."
+        )
+    if language_token not in generation_config.lang_to_id:
+        raise ValueError(
+            f"{language_token} is not supported by this specific model as it is not in the `generation_config.lang_to_id`."
+            "(You should just add it to the generation config)"
+        )
+
+    return language_token
+
+
 def main():
     # 1. Parse input arguments
     # See all possible arguments in src/transformers/training_args.py
@@ -542,10 +566,12 @@ def main():
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
     audio_column_name = data_args.audio_column_name
-    normalizer = (
-        BasicTextNormalizer() if data_args.language is not None
-        else EnglishTextNormalizer(processor.tokenizer.english_spelling_normalizer)
-    )
+    language = language_to_id(data_args.language, model.generation_config) if data_args.language else None
+    if language is None or language == "<|en|>":
+        normalizer = EnglishTextNormalizer(processor.tokenizer.english_spelling_normalizer)
+    else:
+        normalizer = BasicTextNormalizer()
+
     sampling_rate = processor.feature_extractor.sampling_rate
 
     if data_args.samples_per_dataset is not None:
