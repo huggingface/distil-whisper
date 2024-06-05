@@ -45,6 +45,7 @@ from huggingface_hub import HfFolder, create_repo, get_full_repo_name, snapshot_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from soundfile import LibsndfileError
+from datasets.arrow_dataset import table_iter
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
@@ -629,44 +630,37 @@ def main():
         raw_datasets = raw_datasets.sort(speaker_id_column_name)
 
     def concatenate_dataset(batch):
-        audio, text, speaker_id = [], [], []
+        audio_arrays, texts, speaker_ids = [], [], []
 
-        for sample_audio, sample_text, sample_speaker_id, sample_id in zip(
-            batch[audio_column_name], 
-            batch[text_column_name], 
-            batch[speaker_id_column_name] if speaker_id_column_name else len(text) * [None],
-            batch[id_column_name]
-        ):
+        # skip corrupted samples
+        for row in table_iter(batch.pa_table, batch_size=1):
+            row = batch.formatter.format_row(row)
             try:
-                audio_array = sample_audio["array"]
+                sample_audio = row[audio_column_name]['array']
+                sample_text = row[text_column_name]
+                sample_speaker_id = row[speaker_id_column_name] if speaker_id_column_name else None
             except LibsndfileError:
-                logger.warning(f"{sample_id} corrupted! Skipping sample.")
+                logger.warning(f"{row[id_column_name]} is corrupted! Skipping sample.")
                 continue
-
-            if len(sample_text) == 0 or sample_text is None:
-                logger.warning(f"{sample_id} has empty transcription! Skipping sample.")
-                continue
-
-            audio.append(audio_array)
-            text.append(sample_text)
-            sample_speaker_id.append(sample_speaker_id)
+            audio_arrays.append(sample_audio)
+            texts.append(sample_text)
+            speaker_ids.append(sample_speaker_id)
 
         # initialize concatenations
-        concat_audio = [audio[0]]
-        concat_text = [text[0]]
-        concat_speaker_id = [speaker_id[0]]
+        concat_audio = [audio_arrays[0]]
+        concat_text = [texts[0]]
+        concat_speaker_id = [speaker_ids[0]]
         condition_on_prev = [0]
 
-        for audio, text, speaker_id in zip(audio[1:], text[1:], speaker_id[1:]):
+        for audio_array, text, speaker_id in zip(audio_arrays[1:], texts[1:], speaker_ids[1:]):
             is_same_speaker = speaker_id == concat_speaker_id[-1]
-            is_concatenable = len(audio) + len(concat_audio[-1]) <= max_input_length 
-
+            is_concatenable = len(audio_array) + len(concat_audio[-1]) <= max_input_length 
             if is_same_speaker and is_concatenable:
                 # inplace concatenation
-                concat_audio[-1] = np.append(concat_audio[-1], audio)
+                concat_audio[-1] = np.append(concat_audio[-1], audio_array)
                 concat_text[-1] = concat_text[-1] + " " + text
             else:
-                concat_audio.append(audio)
+                concat_audio.append(audio_array)
                 concat_text.append(text)
                 concat_speaker_id.append(speaker_id)
                 condition_on_prev.append(1 if is_same_speaker else 0)   
