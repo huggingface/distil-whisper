@@ -1613,6 +1613,11 @@ def main():
                 if (cur_step % training_args.save_steps == 0) or cur_step == total_train_steps:
                     intermediate_dir = os.path.join(training_args.output_dir, f"checkpoint-{cur_step}-epoch-{epoch}")
                     accelerator.save_state(output_dir=intermediate_dir)
+                    feature_extractor.save_pretrained(intermediate_dir)
+                    tokenizer.save_pretrained(intermediate_dir)
+                    config.save_pretrained(intermediate_dir)
+                    student_model.generation_config.save_pretrained(intermediate_dir)
+
                     accelerator.wait_for_everyone()
                     if accelerator.is_main_process:
                         rotate_checkpoints(training_args.save_total_limit, output_dir=training_args.output_dir)
