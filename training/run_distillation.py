@@ -391,6 +391,14 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
+    save_best_total_limit: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": (
+                "Number of best models to be saved."
+            )
+        }
+    )
 
 
 @dataclass
@@ -691,6 +699,7 @@ def sorted_checkpoints(output_dir=None, checkpoint_prefix="checkpoint") -> List[
     ordering_and_checkpoint_path = []
 
     glob_checkpoints = [str(x) for x in Path(output_dir).glob(f"{checkpoint_prefix}-*") if os.path.isdir(x)]
+    glob_checkpoints = [path for path in glob_checkpoints if "val-wer" not in path]  # filter out best model checkpoints
 
     for path in glob_checkpoints:
         regex_match = re.match(f".*{checkpoint_prefix}-([0-9]+)", path)
@@ -702,19 +711,34 @@ def sorted_checkpoints(output_dir=None, checkpoint_prefix="checkpoint") -> List[
     return checkpoints_sorted
 
 
-def rotate_checkpoints(save_total_limit=None, output_dir=None, checkpoint_prefix="checkpoint") -> None:
+def sorted_best_checkpoints(output_dir=None, checkpoint_prefix="checkpoint"):
+    """Helper function to sort saved best checkpoints."""
+    ordering_and_checkpoint_path = []
+
+    glob_checkpoints = [str(x) for x in Path(output_dir).glob(f"{checkpoint_prefix}-*") if os.path.isdir(x)]
+    for path in glob_checkpoints:
+        regex_match = re.search(r"val-wer-([0-9]+\.[0-9]+)", path)
+        if regex_match is not None and regex_match.groups() is not None:
+            ordering_and_checkpoint_path.append((regex_match.groups(1), path))
+
+    checkpoints_sorted = sorted(ordering_and_checkpoint_path, reverse=True)
+    checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
+    return checkpoints_sorted
+
+
+def rotate_checkpoints(save_total_limit=None, output_dir=None, checkpoint_prefix="checkpoint", sorting_fn=sorted_checkpoints) -> None:
     """Helper function to delete old checkpoints."""
     if save_total_limit is None or save_total_limit <= 0:
         return
     # Check if we should delete older checkpoint(s)
-    checkpoints_sorted = sorted_checkpoints(output_dir=output_dir, checkpoint_prefix=checkpoint_prefix)
+    checkpoints_sorted = sorting_fn(output_dir=output_dir, checkpoint_prefix=checkpoint_prefix)
     if len(checkpoints_sorted) <= save_total_limit:
         return
 
     number_of_checkpoints_to_delete = max(0, len(checkpoints_sorted) - save_total_limit)
     checkpoints_to_be_deleted = checkpoints_sorted[:number_of_checkpoints_to_delete]
     for checkpoint in checkpoints_to_be_deleted:
-        logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")
+        logger.info(f"Deleting older checkpoint [{checkpoint}].")
         shutil.rmtree(checkpoint, ignore_errors=True)
 
 
@@ -1523,6 +1547,7 @@ def main():
     continue_training = True
     epochs_trained = 0
     cur_step = 0
+    best_val_wer = np.inf
 
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
@@ -1633,6 +1658,7 @@ def main():
                 if training_args.do_eval and (cur_step % eval_steps == 0 or cur_step == total_train_steps):
                     train_time += time.time() - train_start
                     student_model.eval()
+                    wer_l, labels_l = [], []
                     # ======================== Evaluating ==============================
                     for eval_split in all_eval_splits:
                         eval_metrics = []
@@ -1702,6 +1728,9 @@ def main():
                             f" {wer_desc})"
                         )
 
+                        wer_l.append(wer_metric)
+                        labels_l.append(norm_label_str)
+
                         log_metric(
                             accelerator,
                             metrics=eval_metrics,
@@ -1714,12 +1743,52 @@ def main():
                     # flush the train metrics
                     train_start = time.time()
 
+                    # save best checkpoint
+                    numerators = [wer['wer'] * len(labs) for wer, labs in zip(wer_l, labels_l)] 
+                    val_wer = sum(numerators) / sum(len(labs) for labs in labels_l)
+
+                    if val_wer < best_val_wer:
+                        intermediate_dir = os.path.join(training_args.output_dir, f"checkpoint-{cur_step}-epoch-{epoch}-val-wer-{val_wer:.3f}")
+                        logger.info(f"Saving new best model, validation WER: {val_wer:.3f}")  
+                        accelerator.save_state(output_dir=intermediate_dir)
+                        feature_extractor.save_pretrained(intermediate_dir)
+                        tokenizer.save_pretrained(intermediate_dir)
+                        config.save_pretrained(intermediate_dir)
+                        student_model.generation_config.save_pretrained(intermediate_dir)
+
+                        accelerator.wait_for_everyone()
+
+                        # remove unnecesary checkpoints, save best model and push to hub
+                        if accelerator.is_main_process:
+                            rotate_checkpoints(training_args.save_best_total_limit, output_dir=training_args.output_dir, sorting_fn=sorted_best_checkpoints)
+                            
+                            accelerator.unwrap_model(student_model).save_pretrained(training_args.output_dir)
+
+                            if training_args.push_to_hub:
+                                upload_folder(
+                                    folder_path=training_args.output_dir,
+                                    repo_id=repo_name,
+                                    repo_type="model",
+                                    commit_message=f"Saving best state, step {cur_step}, val wer {val_wer:.3f}",
+                                )
+                                
+                        best_val_wer = val_wer
+
                 # break condition
                 if cur_step == total_train_steps:
 
+                    # the model under training_args.output_dir is the best model, let's also save end of training weights 
+                    final_weights_dir = os.path.join(training_args.output_dir, "end-of-training-weights")
+
+                    feature_extractor.save_pretrained(final_weights_dir)
+                    tokenizer.save_pretrained(final_weights_dir)
+                    # save the config and generation config as well
+                    config.save_pretrained(final_weights_dir)
+                    student_model.generation_config.save_pretrained(final_weights_dir)
+
                     # un-wrap student model for save
                     student_model = accelerator.unwrap_model(student_model)
-                    student_model.save_pretrained(training_args.output_dir)
+                    student_model.save_pretrained(final_weights_dir)
 
                     if training_args.push_to_hub:
                         upload_folder(
