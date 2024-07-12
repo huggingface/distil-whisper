@@ -1772,9 +1772,18 @@ def main():
                 # break condition
                 if cur_step == total_train_steps:
 
+                    # the model under training_args.output_dir is the best model, let's also save end of training weights 
+                    final_weights_dir = os.path.join(training_args.output_dir, "end-of-training-weights")
+
+                    feature_extractor.save_pretrained(final_weights_dir)
+                    tokenizer.save_pretrained(final_weights_dir)
+                    # save the config and generation config as well
+                    config.save_pretrained(final_weights_dir)
+                    student_model.generation_config.save_pretrained(final_weights_dir)
+
                     # un-wrap student model for save
                     student_model = accelerator.unwrap_model(student_model)
-                    student_model.save_pretrained(training_args.output_dir)
+                    student_model.save_pretrained(final_weights_dir)
 
                     if training_args.push_to_hub:
                         upload_folder(
