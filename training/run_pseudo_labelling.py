@@ -770,7 +770,7 @@ def main():
             else:
                 repo_name = training_args.hub_model_id
             create_repo(repo_name, repo_type="dataset", exist_ok=True, token=training_args.hub_token)
-            snapshot_download(repo_id=repo_name, local_dir=output_dir)
+            snapshot_download(repo_id=repo_name, repo_type="dataset", local_dir=output_dir)
 
             # Ensure large txt files can be pushed to the Hub with git-lfs
             with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
