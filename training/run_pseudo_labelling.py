@@ -796,17 +796,30 @@ def main():
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        # normalize everything and re-compute the WER
-        norm_pred_str = [normalizer(pred) for pred in pred_str]
-        norm_label_str = [normalizer(label) for label in label_str]
-        # for logging, we need the pred/labels to match the norm_pred/norm_labels, so discard any filtered samples here
-        pred_str = [pred_str[i] for i in range(len(norm_pred_str)) if len(norm_label_str[i]) > 0]
-        label_str = [label_str[i] for i in range(len(norm_label_str)) if len(norm_label_str[i]) > 0]
-        file_ids = [file_ids[i] for i in range(len(file_ids)) if len(norm_label_str[i]) > 0]
-        # filtering step to only evaluate the samples that correspond to non-zero normalized references:
-        norm_pred_str = [norm_pred_str[i] for i in range(len(norm_pred_str)) if len(norm_label_str[i]) > 0]
-        norm_label_str = [norm_label_str[i] for i in range(len(norm_label_str)) if len(norm_label_str[i]) > 0]
+        # Normalize everything
+        norm_pred_str = []
+        norm_label_str = []
+    
+        # Iterate through all predictions and labels
+        for pred, label in zip(pred_str, label_str):
+            # Normalize the prediction and label
+            normalized_pred = normalizer(pred)
+            normalized_label = normalizer(label)
+    
+            # If either normalized string is empty after normalization, replace with "<|nocaptions|>"
+            if not normalized_pred.strip():
+                normalized_pred = "<|nocaptions|>"
+            if not normalized_label.strip():
+                normalized_label = "<|nocaptions|>"
+    
+            norm_pred_str.append(normalized_pred)
+            norm_label_str.append(normalized_label)
 
+        # Replace original strings with "<|nocaptions|>" where necessary for consistency
+        pred_str = [pred if len(pred.strip()) > 0 else "<|nocaptions|>" for pred in pred_str]
+        label_str = [label if len(label.strip()) > 0 else "<|nocaptions|>" for label in label_str]
+    
+        # Compute WER using all entries, including those with "<|nocaptions|>"
         wer = 100 * metric.compute(predictions=norm_pred_str, references=norm_label_str)
 
         return {"wer": wer}, pred_str, label_str, norm_pred_str, norm_label_str, file_ids
