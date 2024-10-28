@@ -719,7 +719,7 @@ def sorted_best_checkpoints(output_dir=None, checkpoint_prefix="checkpoint"):
     for path in glob_checkpoints:
         regex_match = re.search(r"val-wer-([0-9]+\.[0-9]+)", path)
         if regex_match is not None and regex_match.groups() is not None:
-            ordering_and_checkpoint_path.append((regex_match.groups(1), path))
+            ordering_and_checkpoint_path.append((float(regex_match.groups(1)[0]), path))
 
     checkpoints_sorted = sorted(ordering_and_checkpoint_path, reverse=True)
     checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
