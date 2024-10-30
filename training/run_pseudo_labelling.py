@@ -770,7 +770,7 @@ def main():
             else:
                 repo_name = training_args.hub_model_id
             create_repo(repo_name, repo_type="dataset", exist_ok=True, token=training_args.hub_token)
-            snapshot_download(repo_id=repo_name, repo_type="dataset", local_dir=output_dir)
+            snapshot_download(repo_id=repo_name, repo_type="dataset", local_dir=output_dir, token=training_args.hub_token)
 
             # Ensure large txt files can be pushed to the Hub with git-lfs
             with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
@@ -920,6 +920,7 @@ def main():
                         folder_path=output_dir,
                         repo_id=repo_name,
                         repo_type="dataset",
+                        token=training_args.hub_token,
                         commit_message=f"Saving transcriptions for split {split} step {step}.",
                     )
 
@@ -1008,12 +1009,13 @@ def main():
                 folder_path=output_dir,
                 repo_id=repo_name,
                 repo_type="dataset",
+                token=training_args.hub_token,
                 commit_message=f"Saving final transcriptions for split {split.replace('.', '-').split('/')[-1]}",
             )
     if not data_args.streaming and accelerator.is_main_process:
         raw_datasets.save_to_disk(output_dir, num_proc=num_workers)
         if training_args.push_to_hub:
-            raw_datasets.push_to_hub(repo_name, config_name=data_args.dataset_config_name)
+            raw_datasets.push_to_hub(repo_name, token=training_args.hub_token, config_name=data_args.dataset_config_name)
     accelerator.end_training()
 
 
