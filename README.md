@@ -104,3 +104,5 @@ And also the Whisper paper:
 ```
 
 
+
+EDIT: Stream-whisper will be taking a drastic turn in structure, with a rust cli tool, embedded flite, and other tools to ensure it becomes way powerful tool for the average and enlightened computer user
