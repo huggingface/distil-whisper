@@ -5,7 +5,7 @@
 [[Colab]](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb)
 [[Training Code]](training)
 
-Distil-Whisper is a distilled version of Whisper that is **6 times faster**, 49% smaller, and performs **within 1% word 
+Distil-Whisper is a distilled version of Whisper for English speech recognition that is **6 times faster**, 49% smaller, and performs **within 1% word 
 error rate (WER)** on out-of-distribution evaluation sets:
 
 | Model                                                                      | Params / M | Rel. Latency ↑ | Short-Form WER ↓ | Long-Form WER ↓ |
@@ -23,7 +23,8 @@ resource-constrained applications with very little memory, such as on-device or 
 [distil-small.en](https://huggingface.co/distil-whisper/distil-small.en) is a great choice, since it is only 166M 
 parameters and performs within 4% WER of Whisper large-v3.
 
-**Note:** Distil-Whisper is currently only available for English speech recognition. We are working with the community to distill Whisper on other languages. If you are interested in distilling Whisper in your language, check out the provided [training code](training). We will soon update the repository with multilingual checkpoints when ready!
+> [!NOTE]  
+> Distil-Whisper is only available for English speech recognition. For multilingual speech recognition, we recommend using the [Whisper Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) checkpoint, which was released by OpenAI and leverages the same principles as Distil-Whisper. For details, refer to the Whisper turbo [release statement](https://github.com/openai/whisper/discussions/2363).
 
 ## 1. Usage
 
