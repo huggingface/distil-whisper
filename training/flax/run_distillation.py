@@ -24,11 +24,12 @@ import re
 import shutil
 import string
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
 import evaluate
@@ -52,7 +53,7 @@ from flax.jax_utils import pad_shard_unpad, unreplicate
 from flax.serialization import from_bytes, to_bytes
 from flax.training import train_state
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
-from huggingface_hub import Repository, create_repo
+from huggingface_hub import create_repo, get_full_repo_name, upload_folder
 from jax.experimental.compilation_cache import compilation_cache as cc
 from optax._src import linear_algebra
 from torch.utils.data import DataLoader
@@ -70,7 +71,6 @@ from transformers import (
     is_wandb_available,
     set_seed,
 )
-from transformers.file_utils import get_full_repo_name
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
 from transformers.utils import check_min_version, send_example_telemetry
@@ -171,6 +171,42 @@ class ModelArguments:
         metadata={
             "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
         },
+    )
+    bpe_dropout: float = field(
+        default=0.0,
+        metadata={"help": "Probability of dropping out a bpe merge in the training tokenizer"},
+    )
+    apply_spec_augment: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply *SpecAugment* data augmentation to the outputs of the feature encoder."},
+    )
+    mask_time_prob: float = field(
+        default=0.05,
+        metadata={
+            "help": (
+                "Probability of each feature vector along the time axis to be chosen as the start of the vector "
+                "span to be masked. Approximately ``mask_time_prob * sequence_length // mask_time_length`` feature "
+                "vectors will be masked along the time axis."
+            )
+        },
+    )
+    mask_time_length: int = field(
+        default=10,
+        metadata={"help": "Length of vector span to mask along the time axis."},
+    )
+    mask_feature_prob: float = field(
+        default=0.0,
+        metadata={
+            "help": (
+                "Probability of each feature vector along the feature axis to be chosen as the start of the vectorspan"
+                " to be masked. Approximately ``mask_feature_prob * sequence_length // mask_feature_length`` feature"
+                " bins will be masked along the time axis."
+            )
+        },
+    )
+    mask_feature_length: int = field(
+        default=10,
+        metadata={"help": "Length of vector span to mask along the feature axis."},
     )
 
 
@@ -276,7 +312,7 @@ class DataTrainingArguments:
         metadata={"help": ("Filter audio files that are shorter than `min_duration_in_seconds` seconds")},
     )
     max_label_length: int = field(
-        default=128,
+        default=448,
         metadata={"help": "Truncate transcriptions that are longer `max_label_length` tokens."},
     )
     pad_target_to_multiple_of: Optional[int] = field(
@@ -347,6 +383,10 @@ class DataTrainingArguments:
         default=True,
         metadata={"help": "Whether to use Datasets' streaming mode to load and the data."},
     )
+    trust_remote_code: bool = field(
+        default=True,
+        metadata={"help": "Whether to trust arbitrary python code for datasets on the Hugging Face Hub."},
+    )
     wer_threshold: float = field(
         default=None,
         metadata={
@@ -371,6 +411,18 @@ class DataTrainingArguments:
             "By default, Whisper predicts timestamps to the nearest hundredth of a second."
             "Reducing the timestamp precision to one tenth of a second simplifies the timestamp"
             "prediction task, at the expense of timestamp granularity."
+        },
+    )
+    condition_on_prev_probability: float = field(
+        default=0.0,
+        metadata={
+            "help": "Probability for conditioning on the previous text example. Defaults to 0.0 (i.e. no conditioning)."
+        },
+    )
+    preprocess_audio_features: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to pre-process the audio inputs to log-mel features in the training dataset. Set to False for datasets that contain pre-processed audio inputs."
         },
     )
 
@@ -398,15 +450,28 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
             )
         },
     )
+    freeze_embeddings: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to freeze the decoder embedding tokens and positions."},
+    )
     temperature: Optional[float] = field(
         default=2.0, metadata={"help": "Temperature to anneal the logits when computing the softmax."}
+    )
+    ce_weight: Optional[float] = field(
+        default=0.8,
+        metadata={
+            "help": (
+                "Weighting assigned to the CE loss in the KD formulation. CE loss is "
+                "computed from the student model predictions and pseudo-label targets."
+            )
+        },
     )
     kl_weight: Optional[float] = field(
         default=1.0,
         metadata={
             "help": (
-                "Weighting assigned to the MSE loss in the KD formulation. MSE loss is "
-                "computed between the teacher-student hidden states and attentions."
+                "Weighting assigned to the KL loss in the KD formulation. KL loss is "
+                "computed between the temperature smoothed teacher distribution and student distribution."
             )
         },
     )
@@ -469,6 +534,171 @@ def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.n
     shifted_label_ids[:, 0] = decoder_start_token_id
 
     return shifted_label_ids
+
+
+@flax.struct.dataclass
+class TrainTransformation:
+    config: WhisperConfig
+
+    def __call__(
+        self,
+        batch: Dict[str, np.ndarray],
+    ):
+        """
+        Masks extracted features along time axis and/or along feature axis according to
+        [SpecAugment](https://arxiv.org/abs/1904.08779).
+        """
+        # `config.apply_spec_augment`can set masking to False
+        if not getattr(self.config, "apply_spec_augment", False):
+            return batch
+
+        input_features = batch["input_features"][None, :, :]
+        attention_mask = batch.get("attention_mask")
+
+        # generate indices & apply SpecAugment along time axis
+        batch_size, hidden_size, sequence_length = input_features.shape
+
+        if self.config.mask_time_prob > 0:
+            # generate indices & apply SpecAugment along time axis
+            mask_time_indices = self._compute_mask_indices(
+                (batch_size, sequence_length),
+                mask_prob=self.config.mask_time_prob,
+                mask_length=self.config.mask_time_length,
+                attention_mask=attention_mask,
+                min_masks=self.config.mask_time_min_masks,
+            )
+            mask_time_indices = np.repeat(mask_time_indices[:, None], hidden_size, axis=1)
+            input_features[mask_time_indices] = 0
+
+        if self.config.mask_feature_prob > 0:
+            # generate indices & apply SpecAugment along feature axis
+            mask_feature_indices = self._compute_mask_indices(
+                (batch_size, hidden_size),
+                mask_prob=self.config.mask_feature_prob,
+                mask_length=self.config.mask_feature_length,
+                min_masks=self.config.mask_feature_min_masks,
+            )
+            input_features[mask_feature_indices] = 0
+
+        batch["input_features"] = input_features[0]
+        return batch
+
+    @staticmethod
+    def _compute_mask_indices(
+        shape: Tuple[int, int],
+        mask_prob: float,
+        mask_length: int,
+        attention_mask: Optional[np.ndarray] = None,
+        min_masks: int = 0,
+    ) -> np.ndarray:
+        """
+        Computes random mask spans for a given shape. Used to implement [SpecAugment: A Simple Data Augmentation Method for
+        ASR](https://arxiv.org/abs/1904.08779). Note that this method is not optimized to run on TPU and should be run on
+        CPU as part of the preprocessing during training.
+
+        Args:
+            shape: The shape for which to compute masks. This should be of a tuple of size 2 where
+                   the first element is the batch size and the second element is the length of the axis to span.
+            mask_prob:  The percentage of the whole axis (between 0 and 1) which will be masked. The number of
+                        independently generated mask spans of length `mask_length` is computed by
+                        `mask_prob*shape[1]/mask_length`. Note that due to overlaps, `mask_prob` is an upper bound and the
+                        actual percentage will be smaller.
+            mask_length: size of the mask
+            min_masks: minimum number of masked spans
+            attention_mask: A (right-padded) attention mask which independently shortens the feature axis of
+                            each batch dimension.
+        """
+        batch_size, sequence_length = shape
+
+        if mask_length < 1:
+            raise ValueError("`mask_length` has to be larger than 0.")
+
+        if mask_length > sequence_length:
+            raise ValueError(
+                f"`mask_length` has to be smaller than `sequence_length`, but got `mask_length`: {mask_length}"
+                f" and `sequence_length`: {sequence_length}`"
+            )
+
+        # epsilon is used for probabilistic rounding
+        epsilon = np.random.rand(1).item()
+
+        def compute_num_masked_span(input_length):
+            """Given input length, compute how many spans should be masked"""
+            num_masked_span = int(mask_prob * input_length / mask_length + epsilon)
+            num_masked_span = max(num_masked_span, min_masks)
+
+            # make sure num masked span <= sequence_length
+            if num_masked_span * mask_length > sequence_length:
+                num_masked_span = sequence_length // mask_length
+
+            # make sure num_masked span is also <= input_length - (mask_length - 1)
+            if input_length - (mask_length - 1) < num_masked_span:
+                num_masked_span = max(input_length - (mask_length - 1), 0)
+
+            return num_masked_span
+
+        # compute number of masked spans in batch
+        input_lengths = (
+            attention_mask.sum(axis=-1) if attention_mask is not None else [sequence_length for _ in range(batch_size)]
+        )
+
+        # SpecAugment mask to fill
+        spec_aug_mask = np.zeros((batch_size, sequence_length), dtype=bool)
+        spec_aug_mask_idxs = []
+
+        max_num_masked_span = compute_num_masked_span(sequence_length)
+
+        if max_num_masked_span == 0:
+            return spec_aug_mask
+
+        for input_length in input_lengths:
+            # compute num of masked spans for this input
+            num_masked_span = compute_num_masked_span(input_length)
+
+            # get random indices to mask
+            spec_aug_mask_idx = np.random.choice(
+                np.arange(input_length - (mask_length - 1)), num_masked_span, replace=False
+            )
+
+            # pick first sampled index that will serve as a dummy index to pad vector
+            # to ensure same dimension for all batches due to probabilistic rounding
+            # Picking first sample just pads those vectors twice.
+            if len(spec_aug_mask_idx) == 0:
+                # this case can only happen if `input_length` is strictly smaller then
+                # `sequence_length` in which case the last token has to be a padding
+                # token which we can use as a dummy mask id
+                dummy_mask_idx = sequence_length - 1
+            else:
+                dummy_mask_idx = spec_aug_mask_idx[0]
+
+            spec_aug_mask_idx = np.concatenate(
+                [spec_aug_mask_idx, np.ones(max_num_masked_span - num_masked_span, dtype=np.int32) * dummy_mask_idx]
+            )
+            spec_aug_mask_idxs.append(spec_aug_mask_idx)
+
+        spec_aug_mask_idxs = np.array(spec_aug_mask_idxs)
+
+        # expand masked indices to masked spans
+        spec_aug_mask_idxs = np.broadcast_to(
+            spec_aug_mask_idxs[:, :, None], (batch_size, max_num_masked_span, mask_length)
+        )
+        spec_aug_mask_idxs = spec_aug_mask_idxs.reshape(batch_size, max_num_masked_span * mask_length)
+
+        # add offset to the starting indexes so that indexes now create a span
+        offsets = np.arange(mask_length)[None, None, :]
+        offsets = np.broadcast_to(offsets, (batch_size, max_num_masked_span, mask_length)).reshape(
+            batch_size, max_num_masked_span * mask_length
+        )
+        spec_aug_mask_idxs = spec_aug_mask_idxs + offsets
+
+        # ensure that we cannot have indices larger than sequence_length
+        if spec_aug_mask_idxs.max() > sequence_length - 1:
+            spec_aug_mask_idxs[spec_aug_mask_idxs > sequence_length - 1] = sequence_length - 1
+
+        # scatter indices to mask
+        np.put_along_axis(spec_aug_mask, spec_aug_mask_idxs, 1, -1)
+
+        return spec_aug_mask
 
 
 @flax.struct.dataclass
@@ -544,6 +774,7 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
 
         # replace initial prompt tokens with -100 to ignore correctly when computing the loss
         bos_index = np.argmax(labels == self.decoder_start_token_id, axis=1)
+        bos_index = np.where(bos_index > 0, bos_index + 1, bos_index)
         prompt_mask = np.arange(labels.shape[1]) < bos_index[:, None]
         labels = np.where(prompt_mask, -100, labels)
 
@@ -717,7 +948,7 @@ class TrainState(train_state.TrainState):
     def unreplicate(self):
         return jax_utils.unreplicate(self)
 
-    def save_state(self, output_dir, save_total_limit=None, checkpoint_prefix="checkpoint"):
+    def save_state(self, output_dir, checkpoint_prefix="checkpoint"):
         step = int(jax.device_get(unreplicate(self.step)))
         serialized_state = to_bytes(self.unreplicate())
 
@@ -728,9 +959,6 @@ class TrainState(train_state.TrainState):
             f.write(serialized_state)
 
         logger.info(f"Flax train state saved in {output_file}")
-        rotate_checkpoints(
-            save_total_limit=save_total_limit, output_dir=output_dir, checkpoint_prefix=checkpoint_prefix
-        )
 
 
 def save_hf_weights(
@@ -913,8 +1141,11 @@ def load_multiple_datasets(
     sampling_rate: Optional[int] = 16000,
     stopping_strategy: Optional[str] = "first_exhausted",
     dataset_samples: Optional[Union[List, np.array]] = None,
-    streaming: bool = True,
-    seed: int = None,
+    streaming: Optional[bool] = True,
+    seed: Optional[int] = None,
+    audio_column_name: Optional[str] = "audio",
+    preprocess_audio_features: Optional[bool] = True,
+    condition_on_prev_probability: Optional[float] = 0.0,
     **kwargs,
 ) -> IterableDataset:
     dataset_names_dict = convert_dataset_str_to_list(
@@ -927,17 +1158,6 @@ def load_multiple_datasets(
     else:
         probabilities = None
 
-    if len(dataset_names_dict) == 1:
-        dataset_dict = dataset_names_dict[0]
-        # we have a single dataset so just return it as is
-        return load_dataset(
-            dataset_dict["name"],
-            dataset_dict["config"],
-            split=dataset_dict["split"],
-            streaming=streaming,
-            **kwargs,
-        )
-
     all_datasets = []
     # iterate over the datasets we want to interleave
     for dataset_dict in tqdm(dataset_names_dict, desc="Combining datasets..."):
@@ -948,12 +1168,66 @@ def load_multiple_datasets(
             streaming=streaming,
             **kwargs,
         )
-        # resample to specified sampling rate
-        dataset = dataset.cast_column("audio", datasets.features.Audio(sampling_rate))
-        dataset = dataset.remove_columns(
-            set(dataset.features.keys()) - {"audio", dataset_dict["text_column_name"], "whisper_transcript"}
-        )
+        dataset_features = dataset.features.keys()
+        columns_to_keep = {"text", "whisper_transcript"}
+
+        if preprocess_audio_features:
+            if audio_column_name not in dataset_features:
+                raise ValueError(
+                    f"--audio_column_name '{audio_column_name}' not found in dataset"
+                    f" '{dataset_dict['name']}'. Make sure to set `--audio_column_name` to"
+                    f" the correct audio column - one of {', '.join(dataset_features)}."
+                )
+            else:
+                # resample to specified sampling rate
+                dataset = dataset.cast_column("audio", datasets.features.Audio(sampling_rate))
+                columns_to_keep.add("audio")
+        else:
+            if "input_features" not in dataset_features:
+                raise ValueError(
+                    "Input features column 'input_features' not found in dataset"
+                    f" '{dataset_dict['name']}'. Make sure to pre-process the dataset ahead of time with the 'input_features'"
+                    "column, or set `--preprocess_audio_features=True` to pre-process the audio features on the fly."
+                )
+            else:
+                # PIL input features -> numpy array
+                dataset = dataset.with_format("np")
+                columns_to_keep.add("input_features")
+
+        if dataset_dict["text_column_name"] not in dataset_features:
+            raise ValueError(
+                f"Text column name {dataset_dict['text_column_name']} not found in dataset"
+                f" '{dataset_dict['name']}'. Make sure to set `--text_column_name` to the"
+                f" correct text column - one of {', '.join(dataset_features)}."
+            )
+
+        # blanket renaming of all transcription columns to text
+        if dataset_dict["text_column_name"] != "text":
+            dataset = dataset.rename_column(dataset_dict["text_column_name"], "text")
+
+        if "whisper_transcript" not in dataset_features:
+            raise ValueError(
+                f"Pseudo-label column `whisper_transcript` not found in dataset {dataset_dict['name']}. Ensure"
+                "pseudo-labels are present in the dataset under this column name, or train directly on the text "
+                "labels by setting `--use_pseudo_labels=False` and defining the appropriate `--text_column_name`."
+            )
+
+        if condition_on_prev_probability > 0:
+            if "condition_on_prev" not in dataset_features:
+                raise ValueError(
+                    f"Condition column name `condition_on_prev` not found in dataset '{dataset_dict['name']}'. Ensure "
+                    "pseudo-labels are present in the dataset under this column name."
+                )
+            else:
+                columns_to_keep.add("condition_on_prev")
+
+        dataset_features = dataset.features.keys()
+        dataset = dataset.remove_columns(set(dataset_features - columns_to_keep))
         all_datasets.append(dataset)
+
+    if len(all_datasets) == 1:
+        # we have a single dataset so just return it as is
+        return all_datasets[0]
 
     if streaming:
         interleaved_dataset = interleave_datasets(
@@ -1103,11 +1377,6 @@ def main():
         else:
             repo_name = training_args.hub_model_id
         create_repo(repo_name, exist_ok=True, token=training_args.hub_token)
-        repo = Repository(
-            training_args.output_dir,
-            clone_from=repo_name,
-            token=training_args.hub_token,
-        )
 
     if training_args.compilation_cache:
         cc.initialize_cache(os.path.join(model_args.cache_dir, "jax_cache"))
@@ -1128,7 +1397,12 @@ def main():
             seed=training_args.seed,
             cache_dir=data_args.dataset_cache_dir,
             token=True if model_args.use_auth_token else None,
+            preprocess_audio_features=data_args.preprocess_audio_features,
+            condition_on_prev_probability=data_args.condition_on_prev_probability,
+            trust_remote_code=data_args.trust_remote_code,
         )
+
+        raw_datasets_train_features = raw_datasets["train"].features.keys()
 
     if training_args.do_eval:
         dataset_names_dict = convert_dataset_str_to_list(
@@ -1153,6 +1427,7 @@ def main():
                 cache_dir=data_args.dataset_cache_dir,
                 token=True if model_args.use_auth_token else None,
                 streaming=data_args.streaming,
+                trust_remote_code=data_args.trust_remote_code,
             )
         else:
             # load multiple eval sets
@@ -1170,6 +1445,7 @@ def main():
                     cache_dir=data_args.dataset_cache_dir,
                     token=True if model_args.use_auth_token else None,
                     streaming=data_args.streaming,
+                    trust_remote_code=data_args.trust_remote_code,
                 )
                 features = raw_datasets[pretty_name].features.keys()
                 if "text" not in features:
@@ -1185,24 +1461,6 @@ def main():
             "Cannot not train and not do evaluation. At least one of training or evaluation has to be performed."
         )
 
-    raw_datasets_train_features = list(raw_datasets["train"].features.keys())
-
-    if data_args.audio_column_name not in raw_datasets_train_features:
-        raise ValueError(
-            f"--audio_column_name '{data_args.audio_column_name}' not found in dataset"
-            f" '{data_args.dataset_name}'. Make sure to set `--audio_column_name` to"
-            " the correct audio column - one of"
-            f" {', '.join(raw_datasets_train_features)}."
-        )
-
-    if data_args.train_text_column_name not in raw_datasets_train_features:
-        raise ValueError(
-            f"--train_text_column_name {data_args.train_text_column_name} not found in dataset"
-            f" '{data_args.dataset_name}'. Make sure to set `--train_text_column_name` to the"
-            " correct text column - one of"
-            f" {', '.join(raw_datasets_train_features)}."
-        )
-
     # 6. Load pretrained model, tokenizer, and feature extractor
     config = WhisperConfig.from_pretrained(
         (model_args.config_name if model_args.config_name else model_args.model_name_or_path),
@@ -1216,13 +1474,31 @@ def main():
         revision=model_args.model_revision,
         token=True if model_args.use_auth_token else None,
     )
-    tokenizer = WhisperTokenizerFast.from_pretrained(
+    inference_tokenizer = WhisperTokenizerFast.from_pretrained(
         (model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path),
         cache_dir=model_args.cache_dir,
         use_fast=model_args.use_fast_tokenizer,
         revision=model_args.model_revision,
         token=True if model_args.use_auth_token else None,
     )
+
+    if training_args.do_train and model_args.bpe_dropout > 0:
+        # Workaround to enable BPE dropout, c.f. https://github.com/huggingface/tokenizers/issues/201#issuecomment-720392299
+        tokenizer = WhisperTokenizerFast.from_pretrained(
+            (model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path),
+            cache_dir=model_args.cache_dir,
+            use_fast=model_args.use_fast_tokenizer,
+            revision=model_args.model_revision,
+            token=True if model_args.use_auth_token else None,
+            dropout=model_args.bpe_dropout,
+        )
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            tokenizer_files = tokenizer._tokenizer.model.save(tmpdirname, "training_tokenizer")
+            tokenizer._tokenizer.model = type(tokenizer._tokenizer.model).from_file(
+                *tokenizer_files, dropout=model_args.bpe_dropout
+            )
+    else:
+        tokenizer = inference_tokenizer
 
     # override timestamp tokens until tokenizer issues are fixed in transformers
     timestamps = [AddedToken("<|%.2f|>" % (i * 0.02), lstrip=False, rstrip=False) for i in range(1500 + 1)]
@@ -1233,6 +1509,11 @@ def main():
             "activation_dropout": model_args.activation_dropout,
             "attention_dropout": model_args.attention_dropout,
             "dropout": model_args.dropout,
+            "apply_spec_augment": model_args.apply_spec_augment,
+            "mask_time_prob": model_args.mask_time_prob,
+            "mask_time_length": model_args.mask_time_length,
+            "mask_feature_prob": model_args.mask_feature_prob,
+            "mask_feature_length": model_args.mask_feature_length,
         }
     )
 
@@ -1296,6 +1577,7 @@ def main():
 
     if hasattr(teacher_model.generation_config, "is_multilingual") and teacher_model.generation_config.is_multilingual:
         # We need to set the language and task ids for previously multilingual checkpoints - for now we hardcode this to English
+        is_multilingual = True
         tokenizer.set_prefix_tokens(language="English", task="transcribe", predict_timestamps=False)
         student_model.generation_config.update(
             **{
@@ -1303,13 +1585,8 @@ def main():
                 "task": "transcribe",
             }
         )
-
-    # 7. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
-    # so we just need to set the correct target sampling rate.
-    raw_datasets = raw_datasets.cast_column(
-        data_args.audio_column_name,
-        datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate),
-    )
+    else:
+        is_multilingual = False
 
     # 8. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -1322,12 +1599,35 @@ def main():
     num_workers = data_args.preprocessing_num_workers
     dataloader_num_workers = training_args.dataloader_num_workers
     dataloader_prefetch_size = data_args.prefetch_size
+    preprocess_audio_features = data_args.preprocess_audio_features
     train_text_column_name = data_args.train_text_column_name
     eval_text_column_name = "text"
     model_input_name = feature_extractor.model_input_names[0]
     normalizer = EnglishTextNormalizer(tokenizer.english_spelling_normalizer)
     wer_threshold = data_args.wer_threshold
+
+    language = "English" if is_multilingual else None
+    task = "transcribe" if is_multilingual else None
+
+    timestamp_probability = data_args.timestamp_probability
     round_timestamps = data_args.round_timestamps
+    timestamp_ids = tokenizer.timestamp_ids()
+    timestamp_begin = tokenizer.all_special_ids[-1]
+    timestamp_position = 3 if is_multilingual else 1
+    decoder_eot_token_id = tokenizer.eos_token_id
+    decoder_prev_token_id = tokenizer.all_special_ids[-3]
+    prompt_cutoff_length = max_label_length // 2
+
+    bpe_dropout = model_args.bpe_dropout
+    condition_on_prev_probability = data_args.condition_on_prev_probability
+
+    # 9. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
+    # so we just need to set the correct target sampling rate.
+    sampling_rate = feature_extractor.sampling_rate
+    raw_datasets = raw_datasets.cast_column(
+        data_args.audio_column_name,
+        datasets.features.Audio(sampling_rate=sampling_rate),
+    )
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = (
@@ -1346,10 +1646,16 @@ def main():
 
     def is_wer_in_range(ground_truth, whisper_transcript):
         norm_ground_truth = normalizer(ground_truth)
-        if len(norm_ground_truth) > 0 and whisper_transcript is not None:
-            norm_whisper_transcript = normalizer(whisper_transcript)
-            wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
-            return wer < wer_threshold
+        if isinstance(whisper_transcript, (np.ndarray, list)):
+            whisper_transcript = tokenizer.decode(whisper_transcript, skip_special_tokens=True)
+        if len(norm_ground_truth) > 0 and whisper_transcript:
+            if whisper_transcript.upper() == whisper_transcript:
+                # filter entirely upper-case transcriptions: these are erroneous generations from large-v3
+                return False
+            else:
+                norm_whisper_transcript = normalizer(whisper_transcript)
+                wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
+                return wer < wer_threshold
         else:
             # filter automatically since we can't know the WER
             return False
@@ -1357,7 +1663,7 @@ def main():
     filter_by_wer_threshold = partial(
         raw_datasets["train"].filter,
         function=is_wer_in_range,
-        input_columns=[eval_text_column_name, train_text_column_name],
+        input_columns=["text", "whisper_transcript"],
     )
 
     if wer_threshold is not None:
@@ -1387,35 +1693,76 @@ def main():
 
     def prepare_train_dataset(batch):
         # process audio input
-        sample = batch[audio_column_name]
-        inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
-        batch[model_input_name] = inputs.get(model_input_name)[0]
-        batch["input_length"] = len(sample["array"])
+        # process audio
+        if preprocess_audio_features:
+            sample = batch[audio_column_name]
+            inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
+            batch["input_features"] = inputs.input_features[0]
+            batch["input_length"] = len(sample["array"])
+        else:
+            # for forwards compatibility with datasets: datasets with pil features are not cast to np arrays with
+            # set format
+            batch["input_features"] = np.array(batch["input_features"])
 
         # process text targets
         input_str = batch[train_text_column_name]
 
-        # prompt & timestamp processing: for now, we only do one or the other
-        if input_str.startswith("<|startoftranscript|>") or input_str.startswith("<|startofprev|>"):
-            # prompted target text already has special ids added, so don't add them here
-            batch["labels"] = tokenizer(input_str, add_special_tokens=False).input_ids
-            return batch
+        if isinstance(input_str, str):
+            # prompt & timestamp processing: for now, we only do one or the other
+            if input_str.startswith("<|startoftranscript|>") or input_str.startswith("<|startofprev|>"):
+                # prompted target text already has special ids added, so don't add them here
+                batch["labels"] = tokenizer(input_str, add_special_tokens=False).input_ids
+                return batch
 
-        has_timestamps = has_timestamp_tokens(input_str)
+            has_timestamps = has_timestamp_tokens(input_str)
 
-        if has_timestamps:
-            predict_timestamps = bool(np.random.binomial(1, data_args.timestamp_probability))
-            if not predict_timestamps:
-                # filter timestamp token ids if not part of the prediction task
-                input_str = tokenizer._filter_timestamp_ids(input_str)
-            elif round_timestamps:
-                input_str = round_timestamp_tokens(input_str)
+            if has_timestamps:
+                predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
+                if not predict_timestamps:
+                    # filter timestamp token ids if not part of the prediction task
+                    input_str = tokenizer._filter_timestamp_ids(input_str)
+                elif round_timestamps:
+                    input_str = round_timestamp_tokens(input_str)
+            else:
+                predict_timestamps = False
+
+            tokenizer.set_prefix_tokens(language=language, task=task, predict_timestamps=predict_timestamps)
+            token_ids = tokenizer(input_str).input_ids
         else:
-            predict_timestamps = False
+            if bpe_dropout > 0:
+                input_str = tokenizer.decode(input_str, decode_with_timestamps=True)
+                input_str = tokenizer.encode(input_str, add_special_tokens=False)
+            # pseudo-labels are encoded as token ids (np array)
+            # remove the EOT tokens to get the 'true' token length
+            token_ids = [token for token in input_str if token != decoder_eot_token_id]
+            token_ids = token_ids + [decoder_eot_token_id]
+            # check whether we have timestamps in the PLs and filter if required
+            has_timestamps = len(set(token_ids) & set(timestamp_ids)) > 0
+            if has_timestamps:
+                # sample from binomial distribution to get probability of training on timestamps
+                predict_timestamps = bool(np.random.binomial(1, timestamp_probability))
+                if not predict_timestamps:
+                    # filter timestamps and insert the <|notimestamps|> task token
+                    token_ids = [token for token in token_ids if token < timestamp_begin]
+                    token_ids.insert(timestamp_position, timestamp_begin)
+            condition_on_prev = bool(np.random.binomial(1, condition_on_prev_probability))
+            if condition_on_prev and batch["condition_on_prev"] is not None:
+                prev_ids = list(batch["condition_on_prev"])
+                if has_timestamps and not predict_timestamps:
+                    # filter timestamp ids from prompt when not predicting timestamps
+                    prev_ids = [token for token in prev_ids if token < timestamp_begin]
+                # check that the length of the prompt does not exceed more than half the max label length (224)
+                if len(prev_ids) > prompt_cutoff_length:
+                    prev_ids = prev_ids[-prompt_cutoff_length + 1 :]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+                # and that the total length of the labels does not exceed the max label length (448)
+                if len(prev_ids + token_ids) > max_label_length:
+                    trim_length = len(prev_ids + token_ids) - max_label_length + 1
+                    prev_ids = prev_ids[trim_length:]
+                    prev_ids = [decoder_prev_token_id] + prev_ids
+                token_ids = prev_ids + token_ids
 
-        tokenizer.set_prefix_tokens(language="English", task="transcribe", predict_timestamps=predict_timestamps)
-        input_ids = tokenizer(input_str).input_ids
-        batch["labels"] = input_ids
+        batch["labels"] = token_ids
         return batch
 
     def prepare_eval_dataset(batch):
@@ -1428,11 +1775,12 @@ def main():
 
         # process targets
         input_str = batch[eval_text_column_name]
-        batch["labels"] = tokenizer(input_str).input_ids
+        batch["labels"] = inference_tokenizer(input_str).input_ids
         return batch
 
     vectorized_datasets = IterableDatasetDict() if data_args.streaming else DatasetDict()
     if training_args.do_train:
+        raw_datasets_train_features = list(set(raw_datasets_train_features) - {"input_features"})
         map_fn_train = partial(
             raw_datasets["train"].map, function=prepare_train_dataset, remove_columns=raw_datasets_train_features
         )
@@ -1460,15 +1808,16 @@ def main():
     filter_by_audio_fn = partial(
         vectorized_datasets.filter, function=is_audio_in_length_range, input_columns=["input_length"]
     )
-    vectorized_datasets = (
-        filter_by_audio_fn(num_proc=num_workers, desc="filtering train dataset by audio length")
-        if not data_args.streaming
-        else filter_by_audio_fn()
-    )
+    if preprocess_audio_features:
+        vectorized_datasets = (
+            filter_by_audio_fn(num_proc=num_workers, desc="filtering train dataset by audio length")
+            if not data_args.streaming
+            else filter_by_audio_fn()
+        )
 
     # filter training data with labels longer than max_label_length
     def is_labels_in_length_range(labels):
-        return 0 < len(labels) < max_label_length
+        return 0 < len(labels) <= max_label_length
 
     filter_by_labels_fn = partial(
         vectorized_datasets.filter, function=is_labels_in_length_range, input_columns=["labels"]
@@ -1478,6 +1827,15 @@ def main():
         if not data_args.streaming
         else filter_by_labels_fn()
     )
+
+    # apply spec augment to the training dataset on the fly
+    train_transformation = TrainTransformation(config)
+    if data_args.streaming:
+        vectorized_datasets["train"] = vectorized_datasets["train"].map(train_transformation)
+    else:
+        vectorized_datasets["train"] = vectorized_datasets["train"].set_transform(
+            train_transformation, output_all_columns=True
+        )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -1533,7 +1891,7 @@ def main():
 
     # 9. Save feature extractor, tokenizer, config and generation config
     feature_extractor.save_pretrained(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
+    inference_tokenizer.save_pretrained(training_args.output_dir)
     config.save_pretrained(training_args.output_dir)
     student_model.generation_config.save_pretrained(
         training_args.output_dir
@@ -1657,11 +2015,24 @@ def main():
                 f"you pass the path to a folder with a valid checkpoint for your model."
             )
 
-    def cross_entropy_loss(logits, labels):
+    # label smoothed cross entropy
+    def cross_entropy_loss(logits, labels, label_smoothing_factor=0.0):
+        """
+        The label smoothing implementation is adapted from Flax's official example:
+        https://github.com/google/flax/blob/87a211135c6a377c8f29048a1cac3840e38b9da4/examples/wmt/train.py#L104
+        """
         vocab_size = logits.shape[-1]
+        confidence = 1.0 - label_smoothing_factor
+        low_confidence = (1.0 - confidence) / (vocab_size - 1)
+        normalizing_constant = -(
+            confidence * jnp.log(confidence) + (vocab_size - 1) * low_confidence * jnp.log(low_confidence + 1e-20)
+        )
         # optax onehot always returns a float32 device array, need to downcast if performing mixed precision training
-        onehot_targets = to_dtype(onehot(labels, vocab_size))
-        loss = optax.softmax_cross_entropy(logits, onehot_targets)
+        soft_labels = onehot(labels, vocab_size, on_value=confidence, off_value=low_confidence)
+
+        loss = optax.softmax_cross_entropy(logits, soft_labels)
+        loss = loss - normalizing_constant
+
         # ignore padded tokens from loss, i.e. where labels are not set to -100
         padding = labels >= 0
         loss = loss * padding
@@ -1723,8 +2094,10 @@ def main():
         teacher_params,
         batch,
         freeze_encoder,
+        freeze_embeddings,
         share_hidden_states,
         temperature=2.0,
+        label_smoothing_factor=0.0,
     ):
         dropout_rng, new_dropout_rng = jax.random.split(student_state.dropout_rng)
 
@@ -1749,6 +2122,7 @@ def main():
                 student_outputs = student_state.apply_fn(
                     decoder_input_ids=batch["decoder_input_ids"],
                     encoder_outputs=encoder_outputs,
+                    freeze_embeddings=freeze_embeddings,
                     params=student_params,
                     dropout_rng=dropout_rng,
                     train=True,
@@ -1760,12 +2134,15 @@ def main():
                     params=student_params,
                     dropout_rng=dropout_rng,
                     freeze_encoder=freeze_encoder,
+                    freeze_embeddings=freeze_embeddings,
                     output_hidden_states=output_hidden_states,
                     train=True,
                 )
 
             # CE (data) loss
-            ce_loss, num_labels = cross_entropy_loss(student_outputs.logits, labels)
+            ce_loss, num_labels = cross_entropy_loss(
+                student_outputs.logits, labels, label_smoothing_factor=label_smoothing_factor
+            )
 
             # rescale by temperature to ensure gradients scale correctly
             teacher_distribution = jax.nn.softmax(teacher_outputs.logits / temperature, axis=-1)
@@ -1784,15 +2161,13 @@ def main():
             )
 
             # use DistilBart formulation - only tune the MSE weight and take remaining HPs from DistilBERT
-            ce_weight = 0.8 if training_args.kl_weight > 0 else 1.0
-            loss = ce_weight * ce_loss + training_args.kl_weight * kl_loss + training_args.mse_weight * mse_loss
-
-            return loss, (
-                ce_loss,
-                kl_loss,
-                mse_loss,
-                num_labels,
+            loss = (
+                training_args.ce_weight * ce_loss
+                + training_args.kl_weight * kl_loss
+                + training_args.mse_weight * mse_loss
             )
+
+            return loss, (ce_loss, kl_loss, mse_loss, num_labels)
 
         grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
         (loss, (ce_loss, kl_loss, mse_loss, num_labels)), grad = grad_fn(to_dtype(student_state.params))
@@ -1838,6 +2213,7 @@ def main():
             train=False,
         )
         student_distribution = jax.nn.log_softmax(student_outputs.logits, axis=-1)
+        # label smoothing factor is always 0 for eval
         ce_loss, num_labels = cross_entropy_loss(student_outputs.logits, labels)
 
         teacher_outputs = teacher_model(
@@ -1856,8 +2232,9 @@ def main():
             else jnp.zeros_like(kl_loss)
         )
 
-        ce_weight = 0.8 if training_args.kl_weight > 0 else 1.0
-        loss = ce_weight * ce_loss + training_args.kl_weight * kl_loss + training_args.mse_weight * mse_loss
+        loss = (
+            training_args.ce_weight * ce_loss + training_args.kl_weight * kl_loss + training_args.mse_weight * mse_loss
+        )
         # true loss = total loss / total samples
         loss = jax.lax.psum(loss, "batch")
         num_labels = jax.lax.psum(num_labels, "batch")
@@ -1887,10 +2264,12 @@ def main():
     gen_kwargs = {
         "max_length": max_label_length,
         "num_beams": num_beams,
-        "language": "<|en|>",
-        "task": "transcribe",
         "return_timestamps": return_timestamps,
     }
+
+    if is_multilingual:
+        # forcing the language and task tokens helps multilingual models in their generations
+        gen_kwargs.update({"language": "<|en|>", "task": "transcribe"})
 
     def generate_step(student_params, batch):
         output_ids = student_model.generate(
@@ -1911,12 +2290,9 @@ def main():
     p_train_step = jax.pmap(
         train_step,
         "batch",
-        in_axes=(0, 0, 0, None, None, None),
+        in_axes=(0, 0, 0, None, None, None, None, None),
         donate_argnums=(0,),
-        static_broadcasted_argnums=(
-            3,
-            4,
-        ),
+        static_broadcasted_argnums=(3, 4, 5),
     )
     p_eval_step = jax.pmap(eval_step, "batch")
     p_generate_step = jax.pmap(generate_step, "batch")
@@ -1977,8 +2353,10 @@ def main():
                 teacher_params,
                 batch,
                 training_args.freeze_encoder,
+                training_args.freeze_embeddings,
                 share_hidden_states,
                 training_args.temperature,
+                training_args.label_smoothing_factor,
             )
 
             if cur_step % training_args.logging_steps == 0 and update_step:
@@ -2012,13 +2390,16 @@ def main():
                         use_scan=training_args.use_scan,
                     )
                     if training_args.save_train_state:
-                        student_state.save_state(
-                            training_args.output_dir, save_total_limit=training_args.save_total_limit
-                        )
+                        student_state.save_state(training_args.output_dir)
+                    rotate_checkpoints(
+                        save_total_limit=training_args.save_total_limit, output_dir=training_args.output_dir
+                    )
                     if training_args.push_to_hub:
-                        repo.push_to_hub(
+                        upload_folder(
+                            folder_path=training_args.output_dir,
+                            repo_id=repo_name,
+                            repo_type="model",
                             commit_message=f"Saving train state of step {cur_step}",
-                            blocking=False,
                         )
 
             if training_args.do_eval and (
@@ -2047,10 +2428,7 @@ def main():
 
                         metrics = pad_shard_unpad(
                             p_eval_step,
-                            static_argnums=(
-                                0,
-                                1,
-                            ),
+                            static_argnums=(0, 1),
                             static_return=True,
                         )(
                             student_state.params,
