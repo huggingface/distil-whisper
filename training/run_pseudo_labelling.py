@@ -883,8 +883,8 @@ def main():
         batches = tqdm(eval_loader, desc=f"Evaluating {split}...", disable=not accelerator.is_local_main_process)
 
         # make the split name pretty for librispeech etc
-        split = split.replace(".", "-").split("/")[-1]
-        output_csv = os.path.join(output_dir, f"{split}-transcription.csv")
+        pretty_split = split.replace(".", "-").split("/")[-1]
+        output_csv = os.path.join(output_dir, f"{pretty_split}-transcription.csv")
 
         for step, (batch, file_ids) in enumerate(zip(batches, file_loader)):
             # Generate predictions and pad to max generated length
