@@ -1,5 +1,7 @@
 # Distil-Whisper
 
+[English](README.md) | [简体中文](README.zh.md)
+
 [[Paper]](https://arxiv.org/abs/2311.00430)
 [[Models]](https://huggingface.co/collections/distil-whisper/distil-whisper-models-65411987e6727569748d2eb6)
 [[Colab]](https://colab.research.google.com/github/sanchit-gandhi/notebooks/blob/main/Distil_Whisper_Benchmark.ipynb)
